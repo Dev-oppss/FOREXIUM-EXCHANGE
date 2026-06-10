@@ -1,0 +1,31 @@
+{
+  "name": "forexium-v5.1.0",
+  "version": "5.4.0",
+  "description": "FOREXIUM - Plateforme Professionnelle de Bureau de Change",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "date-fns": "^3.6.0",
+    "jspdf": "^4.2.1",
+    "lucide-react": "^0.487.0",
+    "qrcode-generator": "^1.4.4",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "recharts": "^2.15.2",
+    "sonner": "^2.0.3"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.7.0",
+    "autoprefixer": "^10.4.19",
+    "postcss": "^8.4.38",
+    "tailwindcss": "^3.4.3",
+    "vite": "^6.3.5"
+  }
+}

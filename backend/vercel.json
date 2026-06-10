@@ -1,0 +1,11 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "installCommand": "npm install",
+  "buildCommand": null,
+  "devCommand": "npm run dev",
+  "functions": {
+    "server.js": {
+      "maxDuration": 30
+    }
+  }
+}
