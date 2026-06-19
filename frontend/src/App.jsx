@@ -2472,6 +2472,14 @@ const TransactionModal = ({ data, profitShare, user, onClose, onSubmit, t, dark,
   // ── Fix 5 : État VENTE pré-rempli si édition ──
   const [deviseVente, setDeviseVente] = useState(initialValues?.deviseVente || initialValues?.devise_vente || 'RMB');
   const [tauxConv, setTauxConv] = useState(initialValues?.tauxConversion?.toString() || '');
+  const [cmupBaseInput, setCmupBaseInput] = useState(() => {
+    const fallbackCmup = initialValues?.cmup_usdt ?? initialValues?.cmupUsdt ?? (data?.devises?.find(d => d.devise === 'USDT')?.cmup ?? 0);
+    return fallbackCmup > 0 ? fallbackCmup.toString() : '';
+  });
+  const [cmupOperation, setCmupOperation] = useState(() => {
+    const initialOperation = String(initialValues?.cmup_operation ?? initialValues?.cmupOperation ?? 'divide').toLowerCase();
+    return initialOperation === 'multiply' ? 'multiply' : 'divide';
+  });
   const [tauxAchatXAFInput, setTauxAchatXAFInput] = useState(initialValues?.tauxAchatXAF?.toString() || '');
   const [tauxVisib, setTauxVisib] = useState(initialValues?.tauxVisible?.toString() || '');
   const [customShareV, setCustomShareV] = useState(Boolean(isEdit));
@@ -2518,7 +2526,7 @@ const TransactionModal = ({ data, profitShare, user, onClose, onSubmit, t, dark,
   ); // taux par unité saisi
 
   // ── Calculs VENTE ──
-  const usdtStock   = data.devises.find(d => d.devise === 'USDT');
+  const usdtStock   = data?.devises?.find(d => d.devise === 'USDT');
   const cmupUsdt    = usdtStock ? usdtStock.cmup : 0;
   const stockActuel = usdtStock ? usdtStock.quantite : 0;
   const ancienneConsoEdit = isEdit && initialType === 'vente'
@@ -2527,10 +2535,13 @@ const TransactionModal = ({ data, profitShare, user, onClose, onSubmit, t, dark,
   const stockDisponibleEdition = stockActuel + ancienneConsoEdit;
   const qte         = parseFloat(form.quantite) || 0;
   const conv        = parseFloat(tauxConv) || 0;
+  const cmupBase    = parseFloat(cmupBaseInput) || 0;
   const tvV         = parseThousands(tauxVisib) || 0;
   const usdtConso   = conv > 0 ? qte / conv : 0;
-  const tauxAchatXAF = conv > 0 ? cmupUsdt / conv : (parseFloat(tauxAchatXAFInput) || 0);
-  const valAchat    = usdtConso * cmupUsdt;
+  const tauxAchatXAF = conv > 0 && cmupBase > 0
+    ? (cmupOperation === 'multiply' ? cmupBase * conv : cmupBase / conv)
+    : (parseFloat(tauxAchatXAFInput) || 0);
+  const valAchat    = usdtConso * (cmupBase > 0 ? cmupBase : cmupUsdt);
   const valVenteV   = qte * tvV;
   const benV        = valVenteV - valAchat;
   const pctPV       = customShareV ? porteurPctV : profitShare.porteur;
@@ -2574,8 +2585,21 @@ const TransactionModal = ({ data, profitShare, user, onClose, onSubmit, t, dark,
     const clean = val.replace(/[^0-9.]/g, '');
     setTauxConv(clean);
     const v = parseFloat(clean);
-    if (v > 0 && cmupUsdt > 0) {
-      setTauxAchatXAFInput((cmupUsdt / v).toFixed(6));
+    const cmupValue = parseFloat(cmupBaseInput) || 0;
+    if (v > 0 && cmupValue > 0) {
+      setTauxAchatXAFInput((cmupOperation === 'multiply' ? cmupValue * v : cmupValue / v).toFixed(6));
+    } else {
+      setTauxAchatXAFInput('');
+    }
+  };
+
+  const handleCmupBaseChange = (val) => {
+    const clean = val.replace(/[^0-9.]/g, '');
+    setCmupBaseInput(clean);
+    const v = parseFloat(tauxConv) || 0;
+    const cmupValue = parseFloat(clean) || 0;
+    if (v > 0 && cmupValue > 0) {
+      setTauxAchatXAFInput((cmupOperation === 'multiply' ? cmupValue * v : cmupValue / v).toFixed(6));
     } else {
       setTauxAchatXAFInput('');
     }
@@ -2585,12 +2609,24 @@ const TransactionModal = ({ data, profitShare, user, onClose, onSubmit, t, dark,
     const clean = val.replace(/[^0-9.]/g, '');
     setTauxAchatXAFInput(clean);
     const v = parseFloat(clean);
-    if (v > 0 && cmupUsdt > 0) {
-      setTauxConv((cmupUsdt / v).toFixed(6));
+    const cmupValue = parseFloat(cmupBaseInput) || 0;
+    if (v > 0 && cmupValue > 0) {
+      setTauxConv((cmupOperation === 'multiply' ? v / cmupValue : cmupValue / v).toFixed(6));
     } else {
       setTauxConv('');
     }
   };
+
+  React.useEffect(() => {
+    const convValue = parseFloat(tauxConv) || 0;
+    const cmupValue = parseFloat(cmupBaseInput) || 0;
+    if (convValue > 0 && cmupValue > 0) {
+      const computed = cmupOperation === 'multiply' ? cmupValue * convValue : cmupValue / convValue;
+      setTauxAchatXAFInput(computed.toFixed(6));
+    } else {
+      setTauxAchatXAFInput('');
+    }
+  }, [tauxConv, cmupBaseInput, cmupOperation]);
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -2622,6 +2658,8 @@ const TransactionModal = ({ data, profitShare, user, onClose, onSubmit, t, dark,
         quantiteDevise: qte,
         tauxConversion: conv,
         tauxAchatXAF,
+        cmup_usdt: cmupBase,
+        cmup_operation: cmupOperation,
         tauxVisible: tvV,
         montant: valVenteV,
         valeurAchat: valAchat,
@@ -2861,31 +2899,58 @@ const TransactionModal = ({ data, profitShare, user, onClose, onSubmit, t, dark,
                 </div>
               </div>
 
-              {/* 2. Taux de conversion ↔ Taux achat XAF (bidirectionnel) */}
+              {/* 2. CMUP + taux de conversion ↔ taux achat XAF */}
               <div className={`p-4 rounded-xl border-2 space-y-3 ${dark ? 'bg-gray-800 border-gray-600' : 'bg-gray-50 border-gray-200'}`}>
                 <p className={`text-xs font-bold uppercase tracking-wide ${dark ? 'text-gray-400' : 'text-gray-500'}`}>
                   {t.linkedRates}
                 </p>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className={`block text-xs font-semibold mb-1.5 ${dark ? 'text-gray-300' : 'text-gray-600'}`}>
-                      {t.tauxConversion} ({deviseVente}/USDT)
-                    </label>
-                    <input type="text" inputMode="decimal"
-                      placeholder={deviseVente === 'RMB' ? 'Ex: 6.94' : 'Ex: 1.08'}
-                      value={tauxConv}
-                      onChange={e => handleTauxConvChange(e.target.value)}
-                      className={`w-full px-3 py-2.5 rounded-xl border-2 text-sm outline-none transition-all ${dark ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-200 bg-white'} focus:border-accent`} />
+                <div className="space-y-3">
+                  <div className="grid grid-cols-[minmax(0,1fr)_64px] gap-2 items-end">
+                    <div>
+                      <label className={`block text-xs font-semibold mb-1 ${dark ? 'text-gray-300' : 'text-gray-600'}`}>
+                        CMUP (XAF/USDT)
+                      </label>
+                      <input type="text" inputMode="decimal"
+                        placeholder="600"
+                        value={cmupBaseInput}
+                        onChange={e => handleCmupBaseChange(e.target.value)}
+                        className={`w-full h-8 px-2.5 rounded-lg border-2 text-xs outline-none transition-all ${dark ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-200 bg-white'} focus:border-accent`} />
+                    </div>
+                    <div>
+                      <label className={`block text-xs font-semibold mb-1 ${dark ? 'text-gray-300' : 'text-gray-600'}`}>
+                        Op.
+                      </label>
+                      <select
+                        value={cmupOperation}
+                        onChange={e => setCmupOperation(e.target.value)}
+                        className={`w-full h-8 px-2 rounded-lg border-2 text-xs outline-none transition-all ${dark ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-200 bg-white'} focus:border-accent`}
+                      >
+                        <option value="multiply">×</option>
+                        <option value="divide">÷</option>
+                      </select>
+                    </div>
                   </div>
-                  <div>
-                    <label className={`block text-xs font-semibold mb-1.5 ${dark ? 'text-gray-300' : 'text-gray-600'}`}>
-                      {t.tauxAchatCalc} (XAF/{deviseVente})
-                    </label>
-                    <input type="text" inputMode="decimal"
-                      placeholder={t.autoCalculated}
-                      value={tauxAchatXAFInput}
-                      onChange={e => handleTauxAchatChange(e.target.value)}
-                      className={`w-full px-3 py-2.5 rounded-xl border-2 text-sm outline-none transition-all ${dark ? 'border-accent/50 bg-gray-700 text-accent' : 'border-accent/30 bg-accent/5 text-accent font-semibold'} focus:border-accent`} />
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className={`block text-xs font-semibold mb-1.5 ${dark ? 'text-gray-300' : 'text-gray-600'}`}>
+                        {t.tauxConversion} ({deviseVente}/USDT)
+                      </label>
+                      <input type="text" inputMode="decimal"
+                        placeholder={deviseVente === 'RMB' ? 'Ex: 6.94' : 'Ex: 1.08'}
+                        value={tauxConv}
+                        onChange={e => handleTauxConvChange(e.target.value)}
+                        className={`w-full px-3 py-2.5 rounded-xl border-2 text-sm outline-none transition-all ${dark ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-200 bg-white'} focus:border-accent`} />
+                    </div>
+                    <div>
+                      <label className={`block text-xs font-semibold mb-1.5 ${dark ? 'text-gray-300' : 'text-gray-600'}`}>
+                        Taux d'achat auto (XAF/{deviseVente})
+                      </label>
+                      <input type="text" inputMode="decimal"
+                        placeholder={t.autoCalculated}
+                        value={tauxAchatXAFInput}
+                        onChange={e => handleTauxAchatChange(e.target.value)}
+                        className={`w-full px-3 py-2.5 rounded-xl border-2 text-sm outline-none transition-all ${dark ? 'border-accent/50 bg-gray-700 text-accent' : 'border-accent/30 bg-accent/5 text-accent font-semibold'} focus:border-accent`} />
+                    </div>
                   </div>
                 </div>
               </div>
@@ -3534,6 +3599,7 @@ const FinalisationModal = ({ transaction, profitShare, onClose, onFinalize, t, d
   const tauxC = parseFloat(tauxCache) || 0;
   const valVenteC = qteDevise * tauxC;
   const benC = valVenteC - (transaction.valeurAchat || 0);
+  const cmupBase = parseFloat(cmupBaseInput) || 0;
   const pctPC = customShareC ? porteurPctC : profitShare.porteur;
   const pctAC = 100 - pctPC;
   const partPC = benC * pctPC / 100;
@@ -3672,6 +3738,14 @@ const EditModal = ({ transaction, data, allTransactions, onClose, onEdit, t, dar
   // ── État VENTE ──
   const [deviseVente, setDeviseVente] = useState(transaction.deviseVente || 'RMB');
   const [tauxConv, setTauxConv] = useState(transaction.tauxConversion?.toString() || '');
+  const [cmupBaseInput, setCmupBaseInput] = useState(() => {
+    const fallbackCmup = transaction.cmup_usdt ?? transaction.cmupUsdt ?? transaction.ancien_cmup ?? transaction.ancienCmup ?? (data?.devises?.find(d => d.devise === 'USDT')?.cmup ?? 0);
+    return fallbackCmup > 0 ? fallbackCmup.toString() : '';
+  });
+  const [cmupOperation, setCmupOperation] = useState(() => {
+    const initialOperation = String(transaction.cmup_operation ?? transaction.cmupOperation ?? 'divide').toLowerCase();
+    return initialOperation === 'multiply' ? 'multiply' : 'divide';
+  });
   const [tauxAchatXAFInput, setTauxAchatXAFInput] = useState(
     transaction.tauxAchatXAF?.toString() || ''
   );
@@ -3719,15 +3793,18 @@ const EditModal = ({ transaction, data, allTransactions, onClose, onEdit, t, dar
   const [fournisseurEdit, setFournisseurEdit] = useState(transaction.fournisseur || '');
 
   // ── Calculs VENTE ──
-  const usdtStock = data.devises.find(d => d.devise === 'USDT');
+  const usdtStock = data?.devises?.find(d => d.devise === 'USDT');
   const cmupUsdt  = usdtStock ? usdtStock.cmup : 0;
   const stockActuel = usdtStock ? usdtStock.quantite : 0;
   const qte  = parseFloat(quantiteDeviseEdit || transaction.quantiteDevise || 0);
   const conv = parseFloat(tauxConv) || 0;
   const tvV  = parseFloat(tauxVisib) || 0;
+  const cmupBase = parseFloat(cmupBaseInput) || 0;
   const usdtConso  = conv > 0 ? qte / conv : 0;
-  const tauxAchatXAF = conv > 0 ? cmupUsdt / conv : (parseFloat(tauxAchatXAFInput) || 0);
-  const valAchat   = usdtConso * cmupUsdt;
+  const tauxAchatXAF = conv > 0 && cmupBase > 0
+    ? (cmupOperation === 'multiply' ? cmupBase * conv : cmupBase / conv)
+    : (parseFloat(tauxAchatXAFInput) || 0);
+  const valAchat   = usdtConso * (cmupBase > 0 ? cmupBase : cmupUsdt);
   const valVenteV  = qte * tvV;
   const benV       = valVenteV - valAchat;
   const pctPV      = customShareV ? porteurPctV : (transaction.porteurPct ?? 70);
@@ -3754,16 +3831,37 @@ const EditModal = ({ transaction, data, allTransactions, onClose, onEdit, t, dar
     const clean = val.replace(/[^0-9.]/g, '');
     setTauxConv(clean);
     const v = parseFloat(clean);
-    if (v > 0 && cmupUsdt > 0) setTauxAchatXAFInput((cmupUsdt / v).toFixed(6));
+    const cmupValue = parseFloat(cmupBaseInput) || 0;
+    if (v > 0 && cmupValue > 0) setTauxAchatXAFInput((cmupOperation === 'multiply' ? cmupValue * v : cmupValue / v).toFixed(6));
+    else setTauxAchatXAFInput('');
+  };
+  const handleCmupBaseChange = (val) => {
+    const clean = val.replace(/[^0-9.]/g, '');
+    setCmupBaseInput(clean);
+    const v = parseFloat(tauxConv) || 0;
+    const cmupValue = parseFloat(clean) || 0;
+    if (v > 0 && cmupValue > 0) setTauxAchatXAFInput((cmupOperation === 'multiply' ? cmupValue * v : cmupValue / v).toFixed(6));
     else setTauxAchatXAFInput('');
   };
   const handleTauxAchatChange = (val) => {
     const clean = val.replace(/[^0-9.]/g, '');
     setTauxAchatXAFInput(clean);
     const v = parseFloat(clean);
-    if (v > 0 && cmupUsdt > 0) setTauxConv((cmupUsdt / v).toFixed(6));
+    const cmupValue = parseFloat(cmupBaseInput) || 0;
+    if (v > 0 && cmupValue > 0) setTauxConv((cmupOperation === 'multiply' ? v / cmupValue : cmupValue / v).toFixed(6));
     else setTauxConv('');
   };
+
+  React.useEffect(() => {
+    const convValue = parseFloat(tauxConv) || 0;
+    const cmupValue = parseFloat(cmupBaseInput) || 0;
+    if (convValue > 0 && cmupValue > 0) {
+      const computed = cmupOperation === 'multiply' ? cmupValue * convValue : cmupValue / convValue;
+      setTauxAchatXAFInput(computed.toFixed(6));
+    } else {
+      setTauxAchatXAFInput('');
+    }
+  }, [tauxConv, cmupBaseInput, cmupOperation]);
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -3790,6 +3888,8 @@ const EditModal = ({ transaction, data, allTransactions, onClose, onEdit, t, dar
       changes.quantiteDevise  = newQteDevise;
       changes.tauxConversion  = newConv;
       changes.tauxAchatXAF    = tauxAchatXAF;
+      changes.cmup_usdt       = cmupBase;
+      changes.cmup_operation  = cmupOperation;
       changes.usdtConsomme    = newUsdtConso;
       changes.quantite        = newUsdtConso;
       changes.client          = clientVal;
@@ -3917,27 +4017,53 @@ const EditModal = ({ transaction, data, allTransactions, onClose, onEdit, t, dar
                 </div>
               </div>
 
-              {/* Taux conv ↔ Taux achat XAF */}
+              {/* CMUP + taux conv ↔ taux achat XAF */}
               <div className={`p-4 rounded-xl border-2 space-y-3 ${dark ? 'bg-gray-800 border-gray-600' : 'bg-gray-50 border-gray-200'}`}>
                 <p className={`text-xs font-bold uppercase tracking-wide ${dark ? 'text-gray-400' : 'text-gray-500'}`}>
                   {langue === 'fr' ? 'Taux — modifier l\'un recalcule l\'autre' : 'Rates — editing one recalculates the other'}
                 </p>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className={`block text-xs font-semibold mb-1.5 ${dark ? 'text-gray-300' : 'text-gray-600'}`}>
-                      {t.tauxConversion} ({deviseVente}/USDT)
-                    </label>
-                    <input type="text" inputMode="decimal"
-                      value={tauxConv} onChange={e => handleTauxConvChange(e.target.value)}
-                      className={`w-full px-3 py-2.5 rounded-xl border-2 text-sm outline-none transition-all ${dark ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-200 bg-white'} focus:border-accent`} />
+                <div className="space-y-3">
+                  <div className="grid grid-cols-[minmax(0,1fr)_64px] gap-2 items-end">
+                    <div>
+                      <label className={`block text-xs font-semibold mb-1 ${dark ? 'text-gray-300' : 'text-gray-600'}`}>
+                        CMUP (XAF/USDT)
+                      </label>
+                      <input type="text" inputMode="decimal"
+                        value={cmupBaseInput}
+                        onChange={e => handleCmupBaseChange(e.target.value)}
+                        className={`w-full h-8 px-2.5 rounded-lg border-2 text-xs outline-none transition-all ${dark ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-200 bg-white'} focus:border-accent`} />
+                    </div>
+                    <div>
+                      <label className={`block text-xs font-semibold mb-1 ${dark ? 'text-gray-300' : 'text-gray-600'}`}>
+                        Op.
+                      </label>
+                      <select
+                        value={cmupOperation}
+                        onChange={e => setCmupOperation(e.target.value)}
+                        className={`w-full h-8 px-2 rounded-lg border-2 text-xs outline-none transition-all ${dark ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-200 bg-white'} focus:border-accent`}
+                      >
+                        <option value="multiply">×</option>
+                        <option value="divide">÷</option>
+                      </select>
+                    </div>
                   </div>
-                  <div>
-                    <label className={`block text-xs font-semibold mb-1.5 ${dark ? 'text-gray-300' : 'text-gray-600'}`}>
-                      {t.tauxAchatCalc} (XAF/{deviseVente})
-                    </label>
-                    <input type="text" inputMode="decimal"
-                      value={tauxAchatXAFInput} onChange={e => handleTauxAchatChange(e.target.value)}
-                      className={`w-full px-3 py-2.5 rounded-xl border-2 text-sm outline-none transition-all ${dark ? 'border-accent/50 bg-gray-700 text-accent' : 'border-accent/30 bg-accent/5 text-accent font-semibold'} focus:border-accent`} />
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className={`block text-xs font-semibold mb-1.5 ${dark ? 'text-gray-300' : 'text-gray-600'}`}>
+                        {t.tauxConversion} ({deviseVente}/USDT)
+                      </label>
+                      <input type="text" inputMode="decimal"
+                        value={tauxConv} onChange={e => handleTauxConvChange(e.target.value)}
+                        className={`w-full px-3 py-2.5 rounded-xl border-2 text-sm outline-none transition-all ${dark ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-200 bg-white'} focus:border-accent`} />
+                    </div>
+                    <div>
+                      <label className={`block text-xs font-semibold mb-1.5 ${dark ? 'text-gray-300' : 'text-gray-600'}`}>
+                        Taux d'achat auto (XAF/{deviseVente})
+                      </label>
+                      <input type="text" inputMode="decimal"
+                        value={tauxAchatXAFInput} onChange={e => handleTauxAchatChange(e.target.value)}
+                        className={`w-full px-3 py-2.5 rounded-xl border-2 text-sm outline-none transition-all ${dark ? 'border-accent/50 bg-gray-700 text-accent' : 'border-accent/30 bg-accent/5 text-accent font-semibold'} focus:border-accent`} />
+                    </div>
                   </div>
                 </div>
               </div>
@@ -7957,6 +8083,8 @@ export default function App() {
           type: 'vente',
           devise_vente: tx.deviseVente,
           taux_conversion: tx.tauxConversion,
+          cmup_usdt: tx.cmup_usdt ?? tx.cmupUsdt ?? 0,
+          cmup_operation: tx.cmup_operation ?? tx.cmupOperation ?? 'divide',
           quantite_vente: tx.quantiteDevise,
           taux_vente_visible: tx.tauxVisible,
           pct_porteur: pctPorteur,
@@ -8084,6 +8212,8 @@ export default function App() {
         id_client: changes.id_client ?? changes.idClient,
         devise_vente: changes.devise_vente ?? changes.deviseVente,
         taux_conversion: changes.taux_conversion ?? changes.tauxConversion,
+        cmup_usdt: changes.cmup_usdt ?? changes.cmupUsdt,
+        cmup_operation: changes.cmup_operation ?? changes.cmupOperation,
         taux_vente_visible: changes.taux_vente_visible ?? changes.tauxVisible,
         taux_vente_cache: changes.taux_vente_cache ?? changes.tauxCache,
         quantite_vente: changes.quantite_vente ?? changes.quantiteDevise,

@@ -21,6 +21,7 @@ const HIGH_PRECISION_FIELDS = new Set([
   'usdt_consomme',
   'taux_achat_unitaire',
   'ancien_cmup',
+  'cmup_usdt',
   'nouveau_cmup',
   'taux_conversion',
   'taux_achat_xaf',
@@ -142,6 +143,8 @@ function normalizeEditPayload(body = {}) {
   if (normalized.quantiteAchat !== undefined && normalized.quantite === undefined) normalized.quantite = normalized.quantiteAchat;
   if (normalized.taux !== undefined && normalized.taux_achat_unitaire === undefined) normalized.taux_achat_unitaire = normalized.taux;
   if (normalized.tauxAchatXAF !== undefined && normalized.taux_achat_xaf === undefined) normalized.taux_achat_xaf = normalized.tauxAchatXAF;
+  if (normalized.cmupUsdt !== undefined && normalized.cmup_usdt === undefined) normalized.cmup_usdt = normalized.cmupUsdt;
+  if (normalized.cmupOperation !== undefined && normalized.cmup_operation === undefined) normalized.cmup_operation = normalized.cmupOperation;
   if (normalized.valeurAchat !== undefined && normalized.valeur_achat_xaf === undefined) normalized.valeur_achat_xaf = normalized.valeurAchat;
   if (normalized.valeurVenteVisible !== undefined && normalized.valeur_vente_visible === undefined) normalized.valeur_vente_visible = normalized.valeurVenteVisible;
   if (normalized.valeurVenteCachee !== undefined && normalized.valeur_vente_cachee === undefined) normalized.valeur_vente_cachee = normalized.valeurVenteCachee;
@@ -348,6 +351,8 @@ function projectSaleRow(row, stockBefore, cmupBefore) {
   const tauxConversion = toNumber(row.taux_conversion, NaN);
   const tauxVisible = toNumber(row.taux_vente_visible, NaN);
   const tauxCacheInput = toNumber(row.taux_vente_cache, NaN);
+  const cmupBase = toNumber(row.cmup_usdt, cmupBefore);
+  const operation = String(row.cmup_operation || 'divide').toLowerCase() === 'multiply' ? 'multiply' : 'divide';
 
   if (!(quantiteVente > 0)) throw badRequest('Quantité de vente invalide');
   if (!(tauxConversion > 0)) throw badRequest('Taux de conversion invalide');
@@ -372,7 +377,7 @@ function projectSaleRow(row, stockBefore, cmupBefore) {
     ? toNumber(row.__pct_associe_cache, NaN)
     : (100 - pctPorteurCache);
 
-  const valeurAchatXaf = usdtConsomme * cmupBefore;
+  const valeurAchatXaf = usdtConsomme * cmupBase;
   const valeurVenteVisible = quantiteVente * tauxVisible;
   const valeurVenteCachee = quantiteVente * tauxCache;
   const beneficeVisible = valeurVenteVisible - valeurAchatXaf;
@@ -394,13 +399,17 @@ function projectSaleRow(row, stockBefore, cmupBefore) {
       taux_conversion: tauxConversion,
       quantite_vente: quantiteVente,
       usdt_consomme: usdtConsomme,
-      taux_achat_xaf: cmupBefore > 0 ? cmupBefore / tauxConversion : 0,
+      taux_achat_xaf: cmupBase > 0
+        ? (operation === 'multiply' ? cmupBase * tauxConversion : cmupBase / tauxConversion)
+        : 0,
       taux_vente_visible: tauxVisible,
       taux_vente_cache: tauxCache,
       valeur_achat_xaf: valeurAchatXaf,
       valeur_vente_visible: valeurVenteVisible,
       valeur_vente_cachee: valeurVenteCachee,
-      ancien_cmup: cmupBefore,
+      ancien_cmup: cmupBase,
+      cmup_usdt: cmupBase,
+      cmup_operation: operation,
       benefice_visible: beneficeVisible,
       benefice_cache: beneficeCache,
       part_porteur_visible: partPorteurVisible,
@@ -1035,6 +1044,7 @@ async function handleVente(data, user) {
     devise_vente, taux_conversion, quantite_vente,
     taux_vente_visible,
     client, fournisseur, id_client = null, id_fournisseur = null, client_id = null, fournisseur_id = null, taux_vente_cache = null,
+    cmup_usdt = null, cmup_operation = 'divide',
     mode_paiement  = 'XAF',
   } = data;
 
@@ -1045,6 +1055,9 @@ async function handleVente(data, user) {
 
     const stockActuel = stockRows.length ? parseFloat(stockRows[0].quantite) : 0;
     const cmupActuel  = stockRows.length ? parseFloat(stockRows[0].cmup)     : 0;
+    const cmupBaseRaw = parseFloat(cmup_usdt);
+    const cmupBase = Number.isFinite(cmupBaseRaw) && cmupBaseRaw > 0 ? cmupBaseRaw : cmupActuel;
+    const operation = String(cmup_operation || 'divide').toLowerCase() === 'multiply' ? 'multiply' : 'divide';
 
     const qteVente     = parseFloat(quantite_vente);
     const tauxConv     = parseFloat(taux_conversion);
@@ -1134,7 +1147,9 @@ async function handleVente(data, user) {
     // quantite_vente = quantité vendue au client dans la devise choisie
     // usdt_consomme   = quantité réelle retirée du stock USDT
     const usdtConsomme = qteVente / tauxConv;
-    const tauxAchatXAF = cmupActuel > 0 ? cmupActuel / tauxConv : 0;
+    const tauxAchatXAF = cmupBase > 0
+      ? (operation === 'multiply' ? cmupBase * tauxConv : cmupBase / tauxConv)
+      : 0;
 
     if (stockActuel < usdtConsomme)
       throw new Error(`Stock insuffisant: ${stockActuel.toFixed(4)} USDT disponibles, ${usdtConsomme.toFixed(4)} USDT requis`);
@@ -1142,7 +1157,7 @@ async function handleVente(data, user) {
     // ── Calculs financiers ────────────────────────────────────
     const valeurVenteVisible = qteVente * tauxVVisible;
     const valeurVenteCachee  = qteVente * tauxVCache;
-    const valeurAchatXAF     = usdtConsomme * cmupActuel;
+    const valeurAchatXAF     = usdtConsomme * cmupBase;
     const montantAPayer      = valeurVenteVisible;
     const montantPaye        = Math.max(0, toNumber(data.montant_paye ?? data.montantPaye, 0));
 
@@ -1168,10 +1183,12 @@ async function handleVente(data, user) {
         part_porteur_cachee,  part_associe_cachee,
         pourcentage_porteur,  pourcentage_associe,
         client, fournisseur, client_id, id_fournisseur,
+        cmup_usdt, cmup_operation,
         montant_a_payer, montant_paye, statut, date
       ) VALUES (
         ?, ?, 'vente',
         ?, ?, ?, ?, ?,
+        ?, ?,
         ?, ?,
         ?, ?,
         ?, ?,
@@ -1188,12 +1205,13 @@ async function handleVente(data, user) {
         devise_vente, tauxConv, tauxAchatXAF, qteVente, usdtConsomme,
         tauxVVisible, valeurVenteVisible,
         tauxVCache,   valeurVenteCachee,
-        valeurAchatXAF, cmupActuel,
+        valeurAchatXAF, cmupBase,
         beneficeVisible, beneficeCache,
         partPorteurVisible, partAssocieVisible,
         partPorteurCachee,  partAssocieCachee,
         pct_porteur, pct_associe,
         clientNom, fournisseurNom, clientId, fournisseurId,
+        cmupBase, operation,
         montantAPayer, montantPaye, new Date(),
       ]
     );
