@@ -214,6 +214,11 @@ const TRANSLATIONS = {
     totalStockValue: 'Valeur totale stock',
     linkedRates: "Taux — modifier l'un recalcule l'autre",
     autoCalculated: 'Auto-calculé',
+    cmupBase: 'CMUP de base',
+    cmupOperation: 'Opération',
+    multiply: '× Multiplier',
+    divide: '÷ Diviser',
+    purchaseRateAuto: 'Taux d\'achat calculé',
     selectClient: '— Sélectionner un client —',
     selectSupplier: '— Sélectionner un fournisseur —',
     chooseSupplier: '— Choisir le fournisseur —',
@@ -284,12 +289,6 @@ const TRANSLATIONS = {
     soldeActuel: 'Solde actuel',
     totalEntrees: 'Total entrées', totalSorties: 'Total sorties',
     cmupActuel: 'CMUP actuel', valeurStock: 'Valeur du stock',
-    supplierStockBreakdown: 'Répartition du stock par fournisseur',
-    supplierStockAvailable: 'Disponible',
-    supplierStockDebt: 'Dette stock',
-    supplierStockBefore: 'Stock fournisseur avant',
-    supplierStockAfter: 'Stock fournisseur après',
-    noSupplierStock: 'Aucun stock fournisseur',
     sourceAchat: 'Source financement', clientVente: 'Client',
     deviseSortie: 'Devise sortie', qteDevise: 'Qté devise',
     tauxConvUsdt: 'Taux conv. USDT', tauxAchatXaf: 'Taux achat XAF',
@@ -510,6 +509,11 @@ const TRANSLATIONS = {
     totalStockValue: 'Total stock value',
     linkedRates: 'Rates — editing one recalculates the other',
     autoCalculated: 'Auto-calculated',
+    cmupBase: 'Base CMUP',
+    cmupOperation: 'Operation',
+    multiply: '× Multiply',
+    divide: '÷ Divide',
+    purchaseRateAuto: 'Calculated purchase rate',
     selectClient: '— Select a client —',
     selectSupplier: '— Select a supplier —',
     chooseSupplier: '— Choose supplier —',
@@ -580,12 +584,6 @@ const TRANSLATIONS = {
     soldeActuel: 'Current balance',
     totalEntrees: 'Total inflows', totalSorties: 'Total outflows',
     cmupActuel: 'Current CMUP', valeurStock: 'Stock value',
-    supplierStockBreakdown: 'Supplier stock breakdown',
-    supplierStockAvailable: 'Available',
-    supplierStockDebt: 'Stock debt',
-    supplierStockBefore: 'Supplier stock before',
-    supplierStockAfter: 'Supplier stock after',
-    noSupplierStock: 'No supplier stock',
     sourceAchat: 'Funding source', clientVente: 'Client',
     deviseSortie: 'Out currency', qteDevise: 'Currency qty',
     tauxConvUsdt: 'Conv. rate USDT', tauxAchatXaf: 'Purchase rate XAF',
@@ -900,124 +898,6 @@ const normalizeEntityName = (...values) => values
   .replace(/\s+/g, ' ')
   .trim();
 
-const buildSupplierStockSummary = (transactions = [], fournisseurs = []) => {
-  const normalizeKeyName = (value) => normalizeEntityName(value).toLowerCase();
-  const fournisseurById = new Map();
-  const fournisseurByName = new Map();
-
-  (Array.isArray(fournisseurs) ? fournisseurs : []).forEach((fournisseur) => {
-    const id = parseInt(fournisseur?.id, 10);
-    const name = normalizeEntityName(fournisseur?.nom, fournisseur?.prenom);
-    if (Number.isFinite(id) && id > 0) fournisseurById.set(id, fournisseur);
-    if (name) fournisseurByName.set(normalizeKeyName(name), fournisseur);
-  });
-
-  const resolveSupplier = (source = {}) => {
-    const rawId = parseInt(source.id_fournisseur ?? source.idFournisseur, 10);
-    const byId = Number.isFinite(rawId) && rawId > 0 ? fournisseurById.get(rawId) : null;
-    const rawName = normalizeEntityName(source.fournisseur);
-    const byName = rawName ? fournisseurByName.get(normalizeKeyName(rawName)) : null;
-    const supplier = byId || byName || null;
-    const id = supplier?.id ?? (Number.isFinite(rawId) && rawId > 0 ? rawId : null);
-    const name = normalizeEntityName(supplier?.nom, supplier?.prenom) || rawName || (id ? `FRN-${String(id).padStart(4, '0')}` : '');
-    if (!id && !name) return null;
-    return {
-      key: id ? `id:${id}` : `name:${normalizeKeyName(name)}`,
-      id,
-      name,
-    };
-  };
-
-  const buckets = new Map();
-  const ensureBucket = (identity) => {
-    if (!identity) return null;
-    if (!buckets.has(identity.key)) {
-      buckets.set(identity.key, {
-        key: identity.key,
-        id: identity.id,
-        name: identity.name,
-        bought: 0,
-        sold: 0,
-        stock: 0,
-        activityCount: 0,
-      });
-    }
-    const bucket = buckets.get(identity.key);
-    bucket.name = bucket.name || identity.name;
-    return bucket;
-  };
-
-  const movementById = new Map();
-  const stockTransactions = (Array.isArray(transactions) ? transactions : [])
-    .filter((tx) => tx?.type === 'vente' || (tx?.type === 'achat' && (tx.devise === 'USDT' || !tx.deviseVente)))
-    .sort((a, b) => new Date(a.date || a.date_enregistrement || 0) - new Date(b.date || b.date_enregistrement || 0));
-
-  stockTransactions.forEach((tx) => {
-    const identity = resolveSupplier(tx);
-    const bucket = ensureBucket(identity);
-    if (!bucket) return;
-
-    const qty = tx.type === 'achat'
-      ? parseThousands(tx.quantite ?? 0)
-      : parseThousands(tx.usdtConsomme ?? tx.usdt_consomme ?? 0);
-    if (!(qty > 0)) return;
-
-    const before = bucket.stock;
-    if (tx.type === 'achat') {
-      bucket.bought += qty;
-      bucket.stock += qty;
-    } else {
-      bucket.sold += qty;
-      bucket.stock -= qty;
-    }
-    bucket.activityCount += 1;
-
-    movementById.set(tx.id, {
-      supplierKey: bucket.key,
-      supplierId: bucket.id,
-      supplierName: bucket.name,
-      before,
-      after: bucket.stock,
-      qty,
-      isDebt: bucket.stock < 0,
-    });
-  });
-
-  (Array.isArray(fournisseurs) ? fournisseurs : []).forEach((fournisseur) => {
-    const identity = resolveSupplier({
-      id_fournisseur: fournisseur?.id,
-      fournisseur: normalizeEntityName(fournisseur?.nom, fournisseur?.prenom),
-    });
-    const bucket = ensureBucket(identity);
-    if (!bucket) return;
-
-    const hasBackendStock = fournisseur?.stock_usdt !== undefined
-      || fournisseur?.total_achats_usdt !== undefined
-      || fournisseur?.total_ventes_usdt !== undefined;
-    if (!hasBackendStock) return;
-
-    bucket.bought = parseThousands(fournisseur.total_achats_usdt ?? bucket.bought);
-    bucket.sold = parseThousands(fournisseur.total_ventes_usdt ?? bucket.sold);
-    bucket.stock = parseThousands(fournisseur.stock_usdt ?? (bucket.bought - bucket.sold));
-    bucket.activityCount = Math.max(bucket.activityCount, parseInt(fournisseur.nb_transactions || 0, 10) || 0);
-  });
-
-  const rows = Array.from(buckets.values())
-    .filter((row) => row.activityCount > 0 || Math.abs(row.stock) > 0.000001 || Math.abs(row.bought) > 0.000001 || Math.abs(row.sold) > 0.000001)
-    .sort((a, b) => {
-      const debtPriority = (a.stock < 0 ? 0 : 1) - (b.stock < 0 ? 0 : 1);
-      if (debtPriority !== 0) return debtPriority;
-      return Math.abs(b.stock) - Math.abs(a.stock) || a.name.localeCompare(b.name);
-    });
-
-  return {
-    rows,
-    movementById,
-    available: rows.reduce((sum, row) => sum + Math.max(0, row.stock), 0),
-    debt: rows.reduce((sum, row) => sum + Math.max(0, -row.stock), 0),
-  };
-};
-
 const getLedgerAmounts = (tx, scope = 'client') => {
   if (scope === 'client') {
     if (tx.type === 'vente') {
@@ -1328,36 +1208,20 @@ const genererQRDataURL = (contenu) => {
   }
 };
 
-const loadImageDataURL = async (url) => {
-  try {
-    const response = await fetch(url);
-    if (!response.ok) return null;
-    const blob = await response.blob();
-    return await new Promise((resolve) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result);
-      reader.onerror = () => resolve(null);
-      reader.readAsDataURL(blob);
-    });
-  } catch {
-    return null;
-  }
-};
-
 
 // ─────────────────────────────────────────────────────────────
-// FACTURE / REÇU GOD WIN CARGO
+// FACTURE / REÇU FOREXIUM
 // Mise en page large inspirée du modèle fourni par l'utilisateur:
 // logo à gauche, titre centré, infos client à gauche, solde à droite,
 // puis tableau simple Date / Montant.
 // ─────────────────────────────────────────────────────────────
-const genererFacturePDF = async (transaction, langue) => {
+const genererFacturePDF = (transaction, langue) => {
   const isEn = langue === 'en';
   const locale = isEn ? enUS : dateFr;
   const doc = new jsPDF({ format: 'a4', unit: 'mm', orientation: 'landscape' });
 
   const toPdfNumber = (value, fallback = 0) => {
-    const amount = parseThousands(value);
+    const amount = Number(value);
     return Number.isFinite(amount) ? amount : fallback;
   };
   const formatPdfNumber = (value, digits = 0) => {
@@ -1379,7 +1243,7 @@ const genererFacturePDF = async (transaction, langue) => {
     : format(safeDate, 'dd/MM/yyyy', { locale });
 
   const typeLabels = {
-    vente: isEn ? 'Sale' : 'Vente',
+    vente: isEn ? 'Client Sale' : 'Vente Client',
     achat: isEn ? 'Currency Purchase' : 'Achat de Devise',
     paiement_client: isEn ? 'Client Payment' : 'Versement Client',
     paiement_fournisseur: isEn ? 'Supplier Payment' : 'Paiement Fournisseur',
@@ -1392,7 +1256,7 @@ const genererFacturePDF = async (transaction, langue) => {
     || transaction.fournisseur
     || transaction.beneficiaire
     || transaction.userName
-    || 'GOD WIN CARGO';
+    || 'FOREXIUM';
   const montantDisplay = transaction.type === 'vente'
     ? (transaction.valeurVenteVisible || transaction.montant || 0)
     : ['paiement_client', 'paiement_fournisseur'].includes(transaction.type)
@@ -1402,82 +1266,23 @@ const genererFacturePDF = async (transaction, langue) => {
     ?? transaction.reste_xaf
     ?? transaction.montant_reste
     ?? transaction.montantReste;
-  const hasExplicitBalance = explicitBalance !== undefined && explicitBalance !== null && String(explicitBalance).trim() !== '';
   const calculatedBalance = transaction.type === 'vente'
     ? toPdfNumber(transaction.montant_a_payer ?? transaction.valeurVenteVisible ?? transaction.montant, montantDisplay)
       - toPdfNumber(transaction.montantPaye ?? transaction.montant_paye, 0)
     : montantDisplay;
-  const soldeDisplay = hasExplicitBalance
+  const soldeDisplay = explicitBalance !== undefined && explicitBalance !== null
     ? explicitBalance
     : calculatedBalance;
-  const currencyLine = transaction.type === 'vente'
+  const quantityLine = transaction.type === 'vente'
     ? `${formatPdfNumber(transaction.quantiteDevise || transaction.quantite_vente || 0, 4)} ${transaction.deviseVente || transaction.devise_vente || ''}`.trim()
     : transaction.type === 'achat'
-      ? `${formatPdfNumber(transaction.quantite || 0, 4)} ${transaction.devise || ''}`.trim()
-      : formatFcfa(montantDisplay);
-  const rateLine = transaction.type === 'vente'
-    ? `${formatPdfNumber(transaction.tauxVisible || transaction.taux_vente_visible || 0)} fcfa`
+      ? `${formatPdfNumber(transaction.quantite || 0, 4)} ${transaction.devise || 'USDT'}`
+      : '1';
+  const detailLine = transaction.type === 'vente'
+    ? `${formatPdfNumber(transaction.usdtConsomme || transaction.usdt_consomme || 0, 4)} USDT`
     : transaction.type === 'achat'
-      ? `${formatPdfNumber(transaction.taux || transaction.taux_achat_unitaire || 0)} fcfa`
+      ? `${formatPdfNumber(transaction.taux || transaction.taux_achat_unitaire || 0)} XAF/USDT`
       : transaction.id || '-';
-  const paidLine = formatFcfa(transaction.montantPaye || transaction.montant_paye || 0);
-  const summaryLabel = ['paiement_client', 'paiement_fournisseur'].includes(transaction.type)
-    ? (hasExplicitBalance ? (isEn ? 'Balance:' : 'Solde :') : (isEn ? 'Amount:' : 'Montant :'))
-    : transaction.type === 'vente'
-      ? (isEn ? 'Balance:' : 'Solde :')
-      : (isEn ? 'Total:' : 'Total :');
-  const summaryAmount = ['paiement_client', 'paiement_fournisseur'].includes(transaction.type) && !hasExplicitBalance
-    ? montantDisplay
-    : transaction.type === 'achat'
-      ? montantDisplay
-      : soldeDisplay;
-  const invoiceFields = (() => {
-    switch (transaction.type) {
-      case 'vente':
-        return [
-          { label: isEn ? 'Client' : 'Nom', value: entityName },
-          { label: isEn ? 'Currency sold' : 'Devise vendue', value: currencyLine },
-          { label: isEn ? 'Rate' : 'Taux', value: rateLine },
-          { label: isEn ? 'Total' : 'Total', value: formatFcfa(montantDisplay) },
-          toPdfNumber(transaction.montantPaye || transaction.montant_paye, 0) > 0
-            ? { label: isEn ? 'Received' : 'Reçu', value: paidLine }
-            : null,
-        ].filter(Boolean);
-      case 'achat':
-        return [
-          { label: isEn ? 'Supplier' : 'Fournisseur', value: entityName },
-          { label: isEn ? 'Currency bought' : 'Devise achetée', value: currencyLine },
-          { label: isEn ? 'Purchase rate' : "Taux d'achat", value: rateLine },
-          { label: isEn ? 'Total' : 'Total', value: formatFcfa(montantDisplay) },
-        ];
-      case 'paiement_client':
-        return [
-          { label: isEn ? 'Client' : 'Nom', value: entityName },
-          { label: isEn ? 'Amount received' : 'Montant reçu', value: formatFcfa(montantDisplay) },
-          hasExplicitBalance ? { label: isEn ? 'Balance after' : 'Solde après', value: formatFcfa(soldeDisplay) } : null,
-        ].filter(Boolean);
-      case 'paiement_fournisseur':
-        return [
-          { label: isEn ? 'Supplier' : 'Fournisseur', value: entityName },
-          { label: isEn ? 'Amount paid' : 'Montant payé', value: formatFcfa(montantDisplay) },
-          hasExplicitBalance ? { label: isEn ? 'Balance after' : 'Solde après', value: formatFcfa(soldeDisplay) } : null,
-        ].filter(Boolean);
-      case 'depense':
-      case 'retrait':
-        return [
-          { label: isEn ? 'Beneficiary' : 'Bénéficiaire', value: entityName },
-          { label: isEn ? 'Amount' : 'Montant', value: formatFcfa(montantDisplay) },
-          transaction.description || transaction.motif
-            ? { label: isEn ? 'Reason' : 'Motif', value: transaction.description || transaction.motif }
-            : null,
-        ].filter(Boolean);
-      default:
-        return [
-          { label: isEn ? 'Name' : 'Nom', value: entityName },
-          { label: isEn ? 'Amount' : 'Montant', value: formatFcfa(montantDisplay) },
-        ];
-    }
-  })();
 
   const W = 297;
   const H = 210;
@@ -1493,30 +1298,36 @@ const genererFacturePDF = async (transaction, langue) => {
   doc.setFillColor(255, 255, 255);
   doc.rect(0, 0, W, H, 'F');
 
-  // Logo bateau fourni par l'utilisateur.
+  // Logo visuel à gauche, dans l'esprit de l'image fournie.
   doc.setDrawColor(200, 200, 200);
   doc.setFillColor(248, 248, 248);
   doc.rect(ML, 10, 72, 30, 'FD');
-  const logoDataUrl = await loadImageDataURL('/god-win-cargo-logo.jpg');
-  if (logoDataUrl) {
-    doc.addImage(logoDataUrl, 'JPEG', ML, 10, 72, 30);
-  } else {
-    doc.setTextColor(...INK);
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(12);
-    doc.text('GOD WIN CARGO', ML + 36, 27, { align: 'center' });
-  }
+  doc.setFillColor(212, 175, 55);
+  doc.roundedRect(22, 18, 16, 14, 3, 3, 'F');
+  doc.setTextColor(10, 22, 40);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(14);
+  doc.text('$', 30, 28, { align: 'center' });
+  doc.setDrawColor(36, 107, 253);
+  doc.setLineWidth(1);
+  doc.line(44, 18, 76, 18);
+  doc.line(44, 23, 68, 23);
+  doc.line(44, 28, 73, 28);
+  doc.setTextColor(...INK);
+  doc.setFontSize(9);
+  doc.text('PREMIUM EXCHANGE', 60, 34, { align: 'center' });
 
   doc.setTextColor(...INK);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(28);
-  doc.text('GOD WIN CARGO', W / 2, 30, { align: 'center' });
+  doc.text('FOREXIUM', W / 2, 30, { align: 'center' });
 
   doc.setFontSize(11);
   doc.text(dateText, W - 28, 16, { align: 'right' });
-  doc.setFont('helvetica', 'normal');
   doc.setFontSize(9);
-  doc.text('Tél. 677 52 68 42', W - 28, 30, { align: 'right' });
+  doc.text('FOREXIUM', W - 28, 29, { align: 'right' });
+  doc.setFont('helvetica', 'normal');
+  doc.text(transaction.id || 'contact@forexium.com', W - 28, 35, { align: 'right' });
 
   const leftLabel = (label, value, y, valueColor = INK) => {
     doc.setFont('helvetica', 'bold');
@@ -1524,11 +1335,12 @@ const genererFacturePDF = async (transaction, langue) => {
     doc.setTextColor(...GREEN);
     doc.text(label, ML + 4, y);
     doc.setTextColor(...valueColor);
-    doc.text(String(value || '-'), ML + 55, y);
+    doc.text(String(value || '-'), ML + 45, y);
   };
-  invoiceFields.slice(0, 5).forEach((field, index) => {
-    leftLabel(field.label, field.value, 58 + (index * 11));
-  });
+  leftLabel(isEn ? 'Name' : 'Nom', entityName, 58);
+  leftLabel(isEn ? 'Amount' : 'Chiffre', formatFcfa(montantDisplay), 70);
+  leftLabel('Total', quantityLine, 82);
+  leftLabel(transaction.type === 'vente' ? 'Total USDT' : 'Reference', detailLine, 92);
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(22);
@@ -1540,9 +1352,9 @@ const genererFacturePDF = async (transaction, langue) => {
   doc.roundedRect(180, 76, 104, 20, 3, 3, 'S');
   doc.setFontSize(16);
   doc.setTextColor(...GREEN);
-  doc.text(summaryLabel, 185, 89);
+  doc.text('Solde :', 185, 89);
   doc.setTextColor(...DEEP_RED);
-  doc.text(formatFcfa(summaryAmount), 274, 89, { align: 'right' });
+  doc.text(formatFcfa(soldeDisplay), 274, 89, { align: 'right' });
 
   doc.setFillColor(...LIGHT_BLUE);
   doc.setDrawColor(255, 255, 255);
@@ -1579,9 +1391,9 @@ const genererFacturePDF = async (transaction, langue) => {
   if (footerParts.length) {
     doc.text(footerParts.join('  |  '), ML, 180);
   }
-  doc.text('GOD WIN CARGO 2026', W - MR, 180, { align: 'right' });
+  doc.text('FOREXIUM 2026', W - MR, 180, { align: 'right' });
 
-  doc.save(`GOD_WIN_CARGO_${transaction.id || 'facture'}.pdf`);
+  doc.save(`FOREXIUM_${transaction.id || 'facture'}.pdf`);
 };
 
 // ═════════════════════════════════════════════════════════════
@@ -1736,310 +1548,8 @@ const genererExtraitXLSX = ({ type, entite, transactions, totals, cmupUsdt = 0 }
   document.body.removeChild(a);
   URL.revokeObjectURL(url);
 };
-// Vrai PDF imprimable pour les extraits de compte client/fournisseur.
-// L'export CSV reste disponible via genererExtraitXLSX, mais le bouton PDF
-// doit produire un document imprimable et non plus un fichier CSV.
-const genererExtraitPDF = async ({ type, entite, transactions, totals, cmupUsdt = 0, langue = 'fr' }) => {
-  const isFourn = type === 'fournisseur';
-  const isEn = langue === 'en';
-  const rows = Array.isArray(transactions) ? transactions : [];
-  const doc = new jsPDF({ format: 'a4', unit: 'mm', orientation: 'landscape' });
-
-  const W = doc.internal.pageSize.getWidth();
-  const H = doc.internal.pageSize.getHeight();
-  const ML = 12;
-  const MR = 12;
-  const INK = [8, 22, 45];
-  const MUTED = [104, 121, 158];
-  const FAINT = [155, 170, 200];
-  const BORDER = [222, 230, 242];
-  const BLUE = [14, 165, 233];
-  const GREEN = [34, 197, 94];
-  const RED = [239, 68, 68];
-  const ORANGE = [245, 158, 11];
-  const LIGHT_BLUE = [233, 244, 255];
-  const LIGHT_GREEN = [235, 252, 242];
-  const LIGHT_ORANGE = [255, 247, 237];
-  const LIGHT_RED = [255, 241, 242];
-
-  const toNumber = (value, fallback = 0) => {
-    const amount = parseThousands(value);
-    return Number.isFinite(amount) ? amount : fallback;
-  };
-  const formatPdfNumber = (value, digits = 0) => {
-    const amount = toNumber(value);
-    const fixed = digits > 0 ? amount.toFixed(digits) : Math.round(amount).toString();
-    const [intPartRaw, decimalPart] = fixed.split('.');
-    const sign = intPartRaw.startsWith('-') ? '-' : '';
-    const intPart = intPartRaw.replace('-', '');
-    const grouped = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
-    return decimalPart ? `${sign}${grouped}.${decimalPart}` : `${sign}${grouped}`;
-  };
-  const money = (value) => `${formatPdfNumber(value)} XAF`;
-  const usdt = (value) => `${formatPdfNumber(value, 4)} USDT`;
-  const balanceText = (value) => {
-    const balance = toNumber(value);
-    if (Math.abs(balance) < 0.01) return isEn ? 'Settled' : 'Soldé';
-    if (balance > 0) return money(balance);
-    return `${isEn ? 'Credit' : 'Surplus'} ${money(Math.abs(balance))}`;
-  };
-  const balanceColor = (value) => {
-    const balance = toNumber(value);
-    if (Math.abs(balance) < 0.01) return GREEN;
-    if (balance < 0) return [124, 58, 237];
-    return ORANGE;
-  };
-  const safeText = (value, fallback = '-') => {
-    const text = String(value ?? '').trim();
-    return text || fallback;
-  };
-  const entityName = safeText([entite?.nom, entite?.prenom].filter(Boolean).join(' '), isFourn ? 'Fournisseur' : 'Client');
-  const dateNow = new Date();
-  const dateStr = dateNow.toLocaleDateString('fr-FR');
-  const fileSafeName = entityName.replace(/[^a-zA-Z0-9_-]+/g, '_');
-
-  const totalDue = isFourn ? toNumber(totals?.total_a_payer_global) : toNumber(totals?.total_a_payer);
-  const totalPaid = isFourn ? toNumber(totals?.total_paye_global) : toNumber(totals?.total_paye);
-  const totalRest = isFourn ? toNumber(totals?.reste_global) : toNumber(totals?.total_reste);
-  const userRows = buildAccountUserSummary(rows, isFourn ? 'supplier' : 'client');
-
-  let y = 14;
-
-  const addFooter = () => {
-    doc.setDrawColor(...BORDER);
-    doc.setLineWidth(0.2);
-    doc.line(ML, H - 12, W - MR, H - 12);
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(7);
-    doc.setTextColor(...MUTED);
-    doc.text('GOD WIN CARGO 2026', ML, H - 7);
-    doc.text(`${isEn ? 'Page' : 'Page'} ${doc.internal.getNumberOfPages()}`, W - MR, H - 7, { align: 'right' });
-  };
-
-  const drawHeader = async (compact = false) => {
-    if (!compact) {
-      const logoDataUrl = await loadImageDataURL('/god-win-cargo-logo.jpg');
-      doc.setDrawColor(200, 200, 200);
-      doc.setFillColor(248, 248, 248);
-      doc.rect(ML, 8, 56, 23, 'FD');
-      if (logoDataUrl) {
-        doc.addImage(logoDataUrl, 'JPEG', ML, 8, 56, 23);
-      } else {
-        doc.setFont('helvetica', 'bold');
-        doc.setFontSize(9);
-        doc.setTextColor(...INK);
-        doc.text('GOD WIN CARGO', ML + 28, 21, { align: 'center' });
-      }
-    }
-
-    doc.setTextColor(...INK);
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(compact ? 13 : 22);
-    doc.text('GOD WIN CARGO', W / 2, compact ? 12 : 18, { align: 'center' });
-    doc.setFontSize(compact ? 9 : 13);
-    doc.setTextColor(...MUTED);
-    doc.text(isFourn
-      ? (isEn ? 'Supplier account statement' : 'Extrait de compte fournisseur')
-      : (isEn ? 'Client account statement' : 'Extrait de compte client'),
-      W / 2,
-      compact ? 18 : 27,
-      { align: 'center' }
-    );
-
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(10);
-    doc.setTextColor(...INK);
-    doc.text(dateStr, W - MR, compact ? 12 : 13, { align: 'right' });
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8);
-    doc.text('Tel. 677 52 68 42', W - MR, compact ? 18 : 21, { align: 'right' });
-
-    y = compact ? 26 : 40;
-  };
-
-  const ensureSpace = async (needed, redrawTable = false) => {
-    if (y + needed <= H - 18) return;
-    addFooter();
-    doc.addPage();
-    await drawHeader(true);
-    if (redrawTable) drawTableHeader();
-  };
-
-  const sectionTitle = (text) => {
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(10);
-    doc.setTextColor(...INK);
-    doc.text(text, ML, y);
-    y += 6;
-  };
-
-  const drawCard = (x, width, label, value, color, bg, sub = '') => {
-    doc.setFillColor(...bg);
-    doc.setDrawColor(...BORDER);
-    doc.roundedRect(x, y, width, 24, 3, 3, 'FD');
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(7.5);
-    doc.setTextColor(...MUTED);
-    doc.text(label.toUpperCase(), x + 5, y + 7);
-    doc.setFontSize(12);
-    doc.setTextColor(...color);
-    doc.text(value, x + 5, y + 15);
-    if (sub) {
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(7);
-      doc.setTextColor(...FAINT);
-      doc.text(sub, x + 5, y + 21);
-    }
-  };
-
-  const drawTableHeader = () => {
-    doc.setFillColor(232, 238, 251);
-    doc.setDrawColor(255, 255, 255);
-    doc.rect(ML, y, W - ML - MR, 9, 'F');
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(7.5);
-    doc.setTextColor(...MUTED);
-    doc.text(isEn ? 'DATE' : 'DATE', ML + 2, y + 6);
-    doc.text(isEn ? 'TYPE' : 'TYPE', ML + 32, y + 6);
-    doc.text(isFourn ? (isEn ? 'TO PAY' : 'A PAYER') : (isEn ? 'AMOUNT' : 'MONTANT'), ML + 95, y + 6, { align: 'right' });
-    doc.text(isFourn ? (isEn ? 'PAID' : 'PAYE') : (isEn ? 'RECEIVED' : 'RECU'), ML + 143, y + 6, { align: 'right' });
-    doc.text(isEn ? 'BALANCE' : 'RESTE', ML + 220, y + 6, { align: 'right' });
-    y += 10;
-  };
-
-  await drawHeader(false);
-
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(11);
-  doc.setTextColor(...INK);
-  doc.text(`${isFourn ? (isEn ? 'Supplier' : 'Fournisseur') : (isEn ? 'Client' : 'Client')} : ${entityName}`, ML, y);
-  y += 10;
-
-  const cardW = (W - ML - MR - 12) / 3;
-  drawCard(ML, cardW, isFourn ? (isEn ? 'Total to pay' : 'Total a payer') : (isEn ? 'Total sales' : 'Total ventes'), money(totalDue), isFourn ? RED : BLUE, isFourn ? LIGHT_RED : LIGHT_BLUE, `${rows.length} ${isEn ? 'operations' : 'operations'}`);
-  drawCard(ML + cardW + 6, cardW, isFourn ? (isEn ? 'Total paid' : 'Total paye') : (isEn ? 'Amount received' : 'Montant recu'), money(totalPaid), GREEN, LIGHT_GREEN);
-  drawCard(ML + (cardW + 6) * 2, cardW, isEn ? 'Balance' : 'Solde', balanceText(totalRest), balanceColor(totalRest), LIGHT_ORANGE);
-  y += 32;
-
-  if (false && isFourn) {
-    sectionTitle(isEn ? 'Supplier details' : 'Detail fournisseur');
-    const stockColor = toNumber(totals?.stock_usdt) < 0 ? RED : GREEN;
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(8);
-    doc.setTextColor(...INK);
-    doc.text(`${isEn ? 'Purchases' : 'Achats'} : ${money(totals?.total_achats || 0)} (${totals?.nb_achats || 0})`, ML, y);
-    doc.text(`${isEn ? 'Linked sales' : 'Ventes liees'} : ${money(totals?.total_ventes || 0)} (${totals?.nb_ventes || 0})`, ML + 75, y);
-    doc.text(`${isEn ? 'Payments' : 'Paiements'} : ${money(totals?.total_paiements_paye || 0)} (${totals?.nb_paiements || 0})`, ML + 155, y);
-    doc.setTextColor(...stockColor);
-    doc.text(`${isEn ? 'USDT stock' : 'Stock USDT'} : ${usdt(totals?.stock_usdt || 0)}`, ML + 220, y);
-    y += 10;
-  }
-
-  if (false && userRows.length > 0) {
-    await ensureSpace(18);
-    sectionTitle(isEn ? 'Responsibility by user' : 'Repartition par utilisateur');
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(7.5);
-    doc.setTextColor(...MUTED);
-    doc.text(isEn ? 'USER' : 'UTILISATEUR', ML, y);
-    doc.text(isEn ? 'ROLE' : 'ROLE', ML + 62, y);
-    doc.text(isEn ? 'OPS' : 'OPS', ML + 98, y, { align: 'right' });
-    doc.text(isEn ? 'DUE' : 'DU', ML + 137, y, { align: 'right' });
-    doc.text(isEn ? 'CREDIT' : 'CREDIT', ML + 181, y, { align: 'right' });
-    doc.text(isEn ? 'BALANCE' : 'SOLDE', ML + 229, y, { align: 'right' });
-    y += 3;
-    doc.setDrawColor(...BORDER);
-    doc.line(ML, y, W - MR, y);
-    y += 5;
-    for (const row of userRows.slice(0, 8)) {
-      await ensureSpace(8);
-      const roleLabel = row.role === 'porteur'
-        ? (isEn ? 'Owner' : 'Porteur')
-        : row.role === 'associe'
-          ? (isEn ? 'Associate' : 'Associe')
-          : safeText(row.role);
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(8);
-      doc.setTextColor(...INK);
-      doc.text(safeText(row.name), ML, y);
-      doc.setTextColor(...MUTED);
-      doc.text(roleLabel, ML + 62, y);
-      doc.text(String(row.activityCount || 0), ML + 98, y, { align: 'right' });
-      doc.setTextColor(...RED);
-      doc.text(money(row.debt || 0), ML + 137, y, { align: 'right' });
-      doc.setTextColor(...GREEN);
-      doc.text(money(row.credit || 0), ML + 181, y, { align: 'right' });
-      doc.setTextColor(...balanceColor(row.net || 0));
-      doc.text(balanceText(row.net || 0), ML + 229, y, { align: 'right' });
-      y += 6;
-    }
-    y += 5;
-  }
-
-  await ensureSpace(22);
-  sectionTitle(isEn ? 'Chronological statement' : 'Detail chronologique');
-  drawTableHeader();
-
-  if (rows.length === 0) {
-    doc.setFont('helvetica', 'normal');
-    doc.setFontSize(9);
-    doc.setTextColor(...MUTED);
-    doc.text(isEn ? 'No transaction recorded.' : 'Aucune transaction enregistree.', ML, y + 8);
-    y += 18;
-  } else {
-    for (let index = 0; index < rows.length; index += 1) {
-      const tx = rows[index];
-      await ensureSpace(9, true);
-      const breakdown = getRoleBreakdownForTransaction(tx, isFourn ? 'supplier' : 'client');
-      const aPayer = breakdown.totalDue;
-      const paye = breakdown.totalPaid;
-      const resteCourant = toNumber(tx.reste_courant ?? (aPayer - paye));
-      const dateFmt = tx.date ? new Date(tx.date).toLocaleDateString('fr-FR') : '-';
-      const typeFmt = tx.type === 'achat'
-        ? (isEn ? 'Purchase' : 'Achat')
-        : tx.type === 'vente'
-          ? (isEn ? 'Sale' : 'Vente')
-          : (isEn ? 'Payment' : 'Paiement');
-      const rowY = y;
-
-      if (index % 2 === 0) {
-        doc.setFillColor(249, 251, 255);
-        doc.rect(ML, rowY - 4, W - ML - MR, 8, 'F');
-      }
-      doc.setFont('helvetica', 'normal');
-      doc.setFontSize(8);
-      doc.setTextColor(...MUTED);
-      doc.text(dateFmt, ML + 2, rowY);
-      doc.setFont('helvetica', 'bold');
-      doc.setTextColor(...INK);
-      doc.text(typeFmt, ML + 32, rowY);
-      doc.setTextColor(isFourn ? RED[0] : BLUE[0], isFourn ? RED[1] : BLUE[1], isFourn ? RED[2] : BLUE[2]);
-      doc.text(aPayer > 0 ? money(aPayer) : '-', ML + 95, rowY, { align: 'right' });
-      doc.setTextColor(...GREEN);
-      doc.text(paye > 0 ? money(paye) : '-', ML + 143, rowY, { align: 'right' });
-      doc.setTextColor(...balanceColor(resteCourant));
-      doc.text(balanceText(resteCourant), ML + 220, rowY, { align: 'right' });
-      y += 8;
-    }
-  }
-
-  y += 3;
-  await ensureSpace(12);
-  doc.setDrawColor(...BORDER);
-  doc.line(ML, y, W - MR, y);
-  y += 7;
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9);
-  doc.setTextColor(...INK);
-  doc.text(isEn ? 'Totals' : 'Totaux', ML, y);
-  doc.text(money(totalDue), ML + 95, y, { align: 'right' });
-  doc.text(money(totalPaid), ML + 143, y, { align: 'right' });
-  doc.setTextColor(...balanceColor(totalRest));
-  doc.text(balanceText(totalRest), ML + 220, y, { align: 'right' });
-
-  addFooter();
-  doc.save(`GOD_WIN_CARGO_Extrait_${isFourn ? 'Fournisseur' : 'Client'}_${fileSafeName}_${dateNow.toISOString().slice(0, 10)}.pdf`);
-};
+// Alias pour compatibilité avec les anciens appels
+const genererExtraitPDF = genererExtraitXLSX;
 // COMPOSANTS UI DE BASE
 // ─────────────────────────────────────────────────────────────
 const Logo = ({ dark }) => (
@@ -2473,12 +1983,19 @@ const TransactionModal = ({ data, profitShare, user, onClose, onSubmit, t, dark,
   const [deviseVente, setDeviseVente] = useState(initialValues?.deviseVente || initialValues?.devise_vente || 'RMB');
   const [tauxConv, setTauxConv] = useState(initialValues?.tauxConversion?.toString() || '');
   const [cmupBaseInput, setCmupBaseInput] = useState(() => {
-    const fallbackCmup = initialValues?.cmup_usdt ?? initialValues?.cmupUsdt ?? (data?.devises?.find(d => d.devise === 'USDT')?.cmup ?? 0);
+    const fallbackCmup = initialValues?.ancien_cmup ?? initialValues?.ancienCmup ?? data.devises.find(d => d.devise === 'USDT')?.cmup ?? 0;
     return fallbackCmup > 0 ? fallbackCmup.toString() : '';
   });
   const [cmupOperation, setCmupOperation] = useState(() => {
-    const initialOperation = String(initialValues?.cmup_operation ?? initialValues?.cmupOperation ?? 'divide').toLowerCase();
-    return initialOperation === 'multiply' ? 'multiply' : 'divide';
+    const initialCmup = parseFloat(initialValues?.ancien_cmup ?? initialValues?.ancienCmup ?? 0) || 0;
+    const initialConv = parseFloat(initialValues?.tauxConversion ?? initialValues?.taux_conversion ?? 0) || 0;
+    const initialRate = parseFloat(initialValues?.tauxAchatXAF ?? initialValues?.taux_achat_xaf ?? 0) || 0;
+    if (initialCmup > 0 && initialConv > 0 && initialRate > 0) {
+      const multiplyDiff = Math.abs(initialRate - (initialCmup * initialConv));
+      const divideDiff = Math.abs(initialRate - (initialCmup / initialConv));
+      return multiplyDiff <= divideDiff ? 'multiply' : 'divide';
+    }
+    return 'divide';
   });
   const [tauxAchatXAFInput, setTauxAchatXAFInput] = useState(initialValues?.tauxAchatXAF?.toString() || '');
   const [tauxVisib, setTauxVisib] = useState(initialValues?.tauxVisible?.toString() || '');
@@ -2526,7 +2043,7 @@ const TransactionModal = ({ data, profitShare, user, onClose, onSubmit, t, dark,
   ); // taux par unité saisi
 
   // ── Calculs VENTE ──
-  const usdtStock   = data?.devises?.find(d => d.devise === 'USDT');
+  const usdtStock   = data.devises.find(d => d.devise === 'USDT');
   const cmupUsdt    = usdtStock ? usdtStock.cmup : 0;
   const stockActuel = usdtStock ? usdtStock.quantite : 0;
   const ancienneConsoEdit = isEdit && initialType === 'vente'
@@ -2537,7 +2054,9 @@ const TransactionModal = ({ data, profitShare, user, onClose, onSubmit, t, dark,
   const conv        = parseFloat(tauxConv) || 0;
   const cmupBase    = parseFloat(cmupBaseInput) || 0;
   const tvV         = parseThousands(tauxVisib) || 0;
-  const usdtConso   = conv > 0 ? qte / conv : 0;
+  const usdtConso   = conv > 0
+    ? (cmupOperation === 'multiply' ? qte * conv : qte / conv)
+    : 0;
   const tauxAchatXAF = conv > 0 && cmupBase > 0
     ? (cmupOperation === 'multiply' ? cmupBase * conv : cmupBase / conv)
     : (parseFloat(tauxAchatXAFInput) || 0);
@@ -2584,37 +2103,11 @@ const TransactionModal = ({ data, profitShare, user, onClose, onSubmit, t, dark,
   const handleTauxConvChange = (val) => {
     const clean = val.replace(/[^0-9.]/g, '');
     setTauxConv(clean);
-    const v = parseFloat(clean);
-    const cmupValue = parseFloat(cmupBaseInput) || 0;
-    if (v > 0 && cmupValue > 0) {
-      setTauxAchatXAFInput((cmupOperation === 'multiply' ? cmupValue * v : cmupValue / v).toFixed(6));
-    } else {
-      setTauxAchatXAFInput('');
-    }
   };
 
   const handleCmupBaseChange = (val) => {
     const clean = val.replace(/[^0-9.]/g, '');
     setCmupBaseInput(clean);
-    const v = parseFloat(tauxConv) || 0;
-    const cmupValue = parseFloat(clean) || 0;
-    if (v > 0 && cmupValue > 0) {
-      setTauxAchatXAFInput((cmupOperation === 'multiply' ? cmupValue * v : cmupValue / v).toFixed(6));
-    } else {
-      setTauxAchatXAFInput('');
-    }
-  };
-
-  const handleTauxAchatChange = (val) => {
-    const clean = val.replace(/[^0-9.]/g, '');
-    setTauxAchatXAFInput(clean);
-    const v = parseFloat(clean);
-    const cmupValue = parseFloat(cmupBaseInput) || 0;
-    if (v > 0 && cmupValue > 0) {
-      setTauxConv((cmupOperation === 'multiply' ? v / cmupValue : cmupValue / v).toFixed(6));
-    } else {
-      setTauxConv('');
-    }
   };
 
   React.useEffect(() => {
@@ -2899,58 +2392,57 @@ const TransactionModal = ({ data, profitShare, user, onClose, onSubmit, t, dark,
                 </div>
               </div>
 
-              {/* 2. CMUP + taux de conversion ↔ taux achat XAF */}
+              {/* 2. Taux de conversion ↔ Taux achat XAF (bidirectionnel) */}
               <div className={`p-4 rounded-xl border-2 space-y-3 ${dark ? 'bg-gray-800 border-gray-600' : 'bg-gray-50 border-gray-200'}`}>
                 <p className={`text-xs font-bold uppercase tracking-wide ${dark ? 'text-gray-400' : 'text-gray-500'}`}>
                   {t.linkedRates}
                 </p>
-                <div className="space-y-3">
-                  <div className="grid grid-cols-[minmax(0,1fr)_64px] gap-2 items-end">
-                    <div>
-                      <label className={`block text-xs font-semibold mb-1 ${dark ? 'text-gray-300' : 'text-gray-600'}`}>
-                        CMUP (XAF/USDT)
-                      </label>
-                      <input type="text" inputMode="decimal"
-                        placeholder="600"
-                        value={cmupBaseInput}
-                        onChange={e => handleCmupBaseChange(e.target.value)}
-                        className={`w-full h-8 px-2.5 rounded-lg border-2 text-xs outline-none transition-all ${dark ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-200 bg-white'} focus:border-accent`} />
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div className="space-y-2">
+                    <div className="grid grid-cols-[minmax(0,1fr)_88px] gap-2 items-end">
+                      <div>
+                        <label className={`block text-[11px] font-semibold mb-1 ${dark ? 'text-gray-300' : 'text-gray-600'}`}>
+                          {t.cmupBase} (XAF/USDT)
+                        </label>
+                        <input type="text" inputMode="decimal"
+                          placeholder={cmupUsdt > 0 ? cmupUsdt.toFixed(6) : '600'}
+                          value={cmupBaseInput}
+                          onChange={e => handleCmupBaseChange(e.target.value)}
+                          className={`w-full h-8 px-2.5 rounded-xl border-2 text-xs outline-none transition-all ${dark ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-200 bg-white'} focus:border-accent`} />
+                      </div>
+                      <div>
+                        <label className={`block text-[11px] font-semibold mb-1 ${dark ? 'text-gray-300' : 'text-gray-600'}`}>
+                          {t.cmupOperation}
+                        </label>
+                        <select
+                          value={cmupOperation}
+                          onChange={e => setCmupOperation(e.target.value)}
+                          className={`w-full h-8 px-2 rounded-xl border-2 text-xs outline-none transition-all ${dark ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-200 bg-white'} focus:border-accent`}
+                        >
+                          <option value="multiply">{t.multiply}</option>
+                          <option value="divide">{t.divide}</option>
+                        </select>
+                      </div>
                     </div>
                     <div>
-                      <label className={`block text-xs font-semibold mb-1 ${dark ? 'text-gray-300' : 'text-gray-600'}`}>
-                        Op.
-                      </label>
-                      <select
-                        value={cmupOperation}
-                        onChange={e => setCmupOperation(e.target.value)}
-                        className={`w-full h-8 px-2 rounded-lg border-2 text-xs outline-none transition-all ${dark ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-200 bg-white'} focus:border-accent`}
-                      >
-                        <option value="multiply">×</option>
-                        <option value="divide">÷</option>
-                      </select>
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className={`block text-xs font-semibold mb-1.5 ${dark ? 'text-gray-300' : 'text-gray-600'}`}>
+                      <label className={`block text-[11px] font-semibold mb-1 ${dark ? 'text-gray-300' : 'text-gray-600'}`}>
                         {t.tauxConversion} ({deviseVente}/USDT)
                       </label>
                       <input type="text" inputMode="decimal"
                         placeholder={deviseVente === 'RMB' ? 'Ex: 6.94' : 'Ex: 1.08'}
                         value={tauxConv}
                         onChange={e => handleTauxConvChange(e.target.value)}
-                        className={`w-full px-3 py-2.5 rounded-xl border-2 text-sm outline-none transition-all ${dark ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-200 bg-white'} focus:border-accent`} />
+                        className={`w-full h-9 px-2.5 rounded-xl border-2 text-xs outline-none transition-all ${dark ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-200 bg-white'} focus:border-accent`} />
                     </div>
-                    <div>
-                      <label className={`block text-xs font-semibold mb-1.5 ${dark ? 'text-gray-300' : 'text-gray-600'}`}>
-                        Taux d'achat auto (XAF/{deviseVente})
-                      </label>
-                      <input type="text" inputMode="decimal"
-                        placeholder={t.autoCalculated}
-                        value={tauxAchatXAFInput}
-                        onChange={e => handleTauxAchatChange(e.target.value)}
-                        className={`w-full px-3 py-2.5 rounded-xl border-2 text-sm outline-none transition-all ${dark ? 'border-accent/50 bg-gray-700 text-accent' : 'border-accent/30 bg-accent/5 text-accent font-semibold'} focus:border-accent`} />
-                    </div>
+                  </div>
+                  <div className="self-start">
+                    <label className={`block text-[11px] font-semibold mb-1 ${dark ? 'text-gray-300' : 'text-gray-600'}`}>
+                      {t.purchaseRateAuto} (XAF/{deviseVente})
+                    </label>
+                    <input type="text" inputMode="decimal"
+                      value={tauxAchatXAFInput}
+                      readOnly
+                      className={`w-full h-9 px-2.5 rounded-xl border-2 text-xs outline-none transition-all ${dark ? 'border-accent/50 bg-gray-700 text-accent' : 'border-accent/30 bg-accent/5 text-accent font-semibold'} focus:border-accent`} />
                   </div>
                 </div>
               </div>
@@ -3599,7 +3091,6 @@ const FinalisationModal = ({ transaction, profitShare, onClose, onFinalize, t, d
   const tauxC = parseFloat(tauxCache) || 0;
   const valVenteC = qteDevise * tauxC;
   const benC = valVenteC - (transaction.valeurAchat || 0);
-  const cmupBase = parseFloat(cmupBaseInput) || 0;
   const pctPC = customShareC ? porteurPctC : profitShare.porteur;
   const pctAC = 100 - pctPC;
   const partPC = benC * pctPC / 100;
@@ -3739,16 +3230,21 @@ const EditModal = ({ transaction, data, allTransactions, onClose, onEdit, t, dar
   const [deviseVente, setDeviseVente] = useState(transaction.deviseVente || 'RMB');
   const [tauxConv, setTauxConv] = useState(transaction.tauxConversion?.toString() || '');
   const [cmupBaseInput, setCmupBaseInput] = useState(() => {
-    const fallbackCmup = transaction.cmup_usdt ?? transaction.cmupUsdt ?? transaction.ancien_cmup ?? transaction.ancienCmup ?? (data?.devises?.find(d => d.devise === 'USDT')?.cmup ?? 0);
+    const fallbackCmup = transaction.ancien_cmup ?? transaction.ancienCmup ?? data.devises.find(d => d.devise === 'USDT')?.cmup ?? 0;
     return fallbackCmup > 0 ? fallbackCmup.toString() : '';
   });
   const [cmupOperation, setCmupOperation] = useState(() => {
-    const initialOperation = String(transaction.cmup_operation ?? transaction.cmupOperation ?? 'divide').toLowerCase();
-    return initialOperation === 'multiply' ? 'multiply' : 'divide';
+    const initialCmup = parseFloat(transaction.ancien_cmup ?? transaction.ancienCmup ?? 0) || 0;
+    const initialConv = parseFloat(transaction.tauxConversion ?? transaction.taux_conversion ?? 0) || 0;
+    const initialRate = parseFloat(transaction.tauxAchatXAF ?? transaction.taux_achat_xaf ?? 0) || 0;
+    if (initialCmup > 0 && initialConv > 0 && initialRate > 0) {
+      const multiplyDiff = Math.abs(initialRate - (initialCmup * initialConv));
+      const divideDiff = Math.abs(initialRate - (initialCmup / initialConv));
+      return multiplyDiff <= divideDiff ? 'multiply' : 'divide';
+    }
+    return 'divide';
   });
-  const [tauxAchatXAFInput, setTauxAchatXAFInput] = useState(
-    transaction.tauxAchatXAF?.toString() || ''
-  );
+  const [tauxAchatXAFInput, setTauxAchatXAFInput] = useState(transaction.tauxAchatXAF?.toString() || '');
   const [tauxVisib, setTauxVisib] = useState(transaction.tauxVisible?.toString() || '');
   const [quantiteDeviseEdit, setQuantiteDeviseEdit] = useState(transaction.quantiteDevise?.toString() || '');
   const [clientVal, setClientVal] = useState(transaction.client || '');
@@ -3793,14 +3289,16 @@ const EditModal = ({ transaction, data, allTransactions, onClose, onEdit, t, dar
   const [fournisseurEdit, setFournisseurEdit] = useState(transaction.fournisseur || '');
 
   // ── Calculs VENTE ──
-  const usdtStock = data?.devises?.find(d => d.devise === 'USDT');
+  const usdtStock = data.devises.find(d => d.devise === 'USDT');
   const cmupUsdt  = usdtStock ? usdtStock.cmup : 0;
   const stockActuel = usdtStock ? usdtStock.quantite : 0;
   const qte  = parseFloat(quantiteDeviseEdit || transaction.quantiteDevise || 0);
   const conv = parseFloat(tauxConv) || 0;
-  const tvV  = parseFloat(tauxVisib) || 0;
   const cmupBase = parseFloat(cmupBaseInput) || 0;
-  const usdtConso  = conv > 0 ? qte / conv : 0;
+  const tvV  = parseFloat(tauxVisib) || 0;
+  const usdtConso  = conv > 0
+    ? (cmupOperation === 'multiply' ? qte * conv : qte / conv)
+    : 0;
   const tauxAchatXAF = conv > 0 && cmupBase > 0
     ? (cmupOperation === 'multiply' ? cmupBase * conv : cmupBase / conv)
     : (parseFloat(tauxAchatXAFInput) || 0);
@@ -3830,26 +3328,11 @@ const EditModal = ({ transaction, data, allTransactions, onClose, onEdit, t, dar
   const handleTauxConvChange = (val) => {
     const clean = val.replace(/[^0-9.]/g, '');
     setTauxConv(clean);
-    const v = parseFloat(clean);
-    const cmupValue = parseFloat(cmupBaseInput) || 0;
-    if (v > 0 && cmupValue > 0) setTauxAchatXAFInput((cmupOperation === 'multiply' ? cmupValue * v : cmupValue / v).toFixed(6));
-    else setTauxAchatXAFInput('');
   };
+
   const handleCmupBaseChange = (val) => {
     const clean = val.replace(/[^0-9.]/g, '');
     setCmupBaseInput(clean);
-    const v = parseFloat(tauxConv) || 0;
-    const cmupValue = parseFloat(clean) || 0;
-    if (v > 0 && cmupValue > 0) setTauxAchatXAFInput((cmupOperation === 'multiply' ? cmupValue * v : cmupValue / v).toFixed(6));
-    else setTauxAchatXAFInput('');
-  };
-  const handleTauxAchatChange = (val) => {
-    const clean = val.replace(/[^0-9.]/g, '');
-    setTauxAchatXAFInput(clean);
-    const v = parseFloat(clean);
-    const cmupValue = parseFloat(cmupBaseInput) || 0;
-    if (v > 0 && cmupValue > 0) setTauxConv((cmupOperation === 'multiply' ? v / cmupValue : cmupValue / v).toFixed(6));
-    else setTauxConv('');
   };
 
   React.useEffect(() => {
@@ -3878,7 +3361,9 @@ const EditModal = ({ transaction, data, allTransactions, onClose, onEdit, t, dar
       }
       const newQteDevise = qte;
       const newConv = conv;
-      const newUsdtConso = conv > 0 ? newQteDevise / newConv : transaction.usdtConsomme;
+      const newUsdtConso = newConv > 0
+        ? (cmupOperation === 'multiply' ? newQteDevise * newConv : newQteDevise / newConv)
+        : transaction.usdtConsomme;
       const newDelta = -newUsdtConso;
       const sim = simulerChaineStock(allTransactions, transaction.id, newDelta);
       if (!sim.valid) {
@@ -3889,7 +3374,8 @@ const EditModal = ({ transaction, data, allTransactions, onClose, onEdit, t, dar
       changes.tauxConversion  = newConv;
       changes.tauxAchatXAF    = tauxAchatXAF;
       changes.cmup_usdt       = cmupBase;
-      changes.cmup_operation  = cmupOperation;
+      changes.cmup_operation   = cmupOperation;
+      changes.ancien_cmup     = cmupBase;
       changes.usdtConsomme    = newUsdtConso;
       changes.quantite        = newUsdtConso;
       changes.client          = clientVal;
@@ -4017,53 +3503,54 @@ const EditModal = ({ transaction, data, allTransactions, onClose, onEdit, t, dar
                 </div>
               </div>
 
-              {/* CMUP + taux conv ↔ taux achat XAF */}
+              {/* Taux conv ↔ Taux achat XAF */}
               <div className={`p-4 rounded-xl border-2 space-y-3 ${dark ? 'bg-gray-800 border-gray-600' : 'bg-gray-50 border-gray-200'}`}>
                 <p className={`text-xs font-bold uppercase tracking-wide ${dark ? 'text-gray-400' : 'text-gray-500'}`}>
                   {langue === 'fr' ? 'Taux — modifier l\'un recalcule l\'autre' : 'Rates — editing one recalculates the other'}
                 </p>
-                <div className="space-y-3">
-                  <div className="grid grid-cols-[minmax(0,1fr)_64px] gap-2 items-end">
-                    <div>
-                      <label className={`block text-xs font-semibold mb-1 ${dark ? 'text-gray-300' : 'text-gray-600'}`}>
-                        CMUP (XAF/USDT)
-                      </label>
-                      <input type="text" inputMode="decimal"
-                        value={cmupBaseInput}
-                        onChange={e => handleCmupBaseChange(e.target.value)}
-                        className={`w-full h-8 px-2.5 rounded-lg border-2 text-xs outline-none transition-all ${dark ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-200 bg-white'} focus:border-accent`} />
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div className="space-y-2">
+                    <div className="grid grid-cols-[minmax(0,1fr)_88px] gap-2 items-end">
+                      <div>
+                        <label className={`block text-[11px] font-semibold mb-1 ${dark ? 'text-gray-300' : 'text-gray-600'}`}>
+                          {t.cmupBase} (XAF/USDT)
+                        </label>
+                        <input type="text" inputMode="decimal"
+                          value={cmupBaseInput}
+                          onChange={e => handleCmupBaseChange(e.target.value)}
+                          className={`w-full h-8 px-2.5 rounded-xl border-2 text-xs outline-none transition-all ${dark ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-200 bg-white'} focus:border-accent`} />
+                      </div>
+                      <div>
+                        <label className={`block text-[11px] font-semibold mb-1 ${dark ? 'text-gray-300' : 'text-gray-600'}`}>
+                          {t.cmupOperation}
+                        </label>
+                        <select
+                          value={cmupOperation}
+                          onChange={e => setCmupOperation(e.target.value)}
+                          className={`w-full h-8 px-2 rounded-xl border-2 text-xs outline-none transition-all ${dark ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-200 bg-white'} focus:border-accent`}
+                        >
+                          <option value="multiply">{t.multiply}</option>
+                          <option value="divide">{t.divide}</option>
+                        </select>
+                      </div>
                     </div>
                     <div>
-                      <label className={`block text-xs font-semibold mb-1 ${dark ? 'text-gray-300' : 'text-gray-600'}`}>
-                        Op.
-                      </label>
-                      <select
-                        value={cmupOperation}
-                        onChange={e => setCmupOperation(e.target.value)}
-                        className={`w-full h-8 px-2 rounded-lg border-2 text-xs outline-none transition-all ${dark ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-200 bg-white'} focus:border-accent`}
-                      >
-                        <option value="multiply">×</option>
-                        <option value="divide">÷</option>
-                      </select>
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className={`block text-xs font-semibold mb-1.5 ${dark ? 'text-gray-300' : 'text-gray-600'}`}>
+                      <label className={`block text-[11px] font-semibold mb-1 ${dark ? 'text-gray-300' : 'text-gray-600'}`}>
                         {t.tauxConversion} ({deviseVente}/USDT)
                       </label>
                       <input type="text" inputMode="decimal"
                         value={tauxConv} onChange={e => handleTauxConvChange(e.target.value)}
-                        className={`w-full px-3 py-2.5 rounded-xl border-2 text-sm outline-none transition-all ${dark ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-200 bg-white'} focus:border-accent`} />
+                        className={`w-full h-9 px-2.5 rounded-xl border-2 text-xs outline-none transition-all ${dark ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-200 bg-white'} focus:border-accent`} />
                     </div>
-                    <div>
-                      <label className={`block text-xs font-semibold mb-1.5 ${dark ? 'text-gray-300' : 'text-gray-600'}`}>
-                        Taux d'achat auto (XAF/{deviseVente})
-                      </label>
-                      <input type="text" inputMode="decimal"
-                        value={tauxAchatXAFInput} onChange={e => handleTauxAchatChange(e.target.value)}
-                        className={`w-full px-3 py-2.5 rounded-xl border-2 text-sm outline-none transition-all ${dark ? 'border-accent/50 bg-gray-700 text-accent' : 'border-accent/30 bg-accent/5 text-accent font-semibold'} focus:border-accent`} />
-                    </div>
+                  </div>
+                  <div className="self-start">
+                    <label className={`block text-[11px] font-semibold mb-1 ${dark ? 'text-gray-300' : 'text-gray-600'}`}>
+                      {t.purchaseRateAuto} (XAF/{deviseVente})
+                    </label>
+                    <input type="text" inputMode="decimal"
+                      value={tauxAchatXAFInput}
+                      readOnly
+                      className={`w-full h-9 px-2.5 rounded-xl border-2 text-xs outline-none transition-all ${dark ? 'border-accent/50 bg-gray-700 text-accent' : 'border-accent/30 bg-accent/5 text-accent font-semibold'} focus:border-accent`} />
                   </div>
                 </div>
               </div>
@@ -4486,7 +3973,7 @@ const SettingsModal = ({ profitShare, onClose, onUpdate, t, dark }) => {
 // REGISTRE MOUVEMENTS DE STOCK USDT
 // Design registre comptable professionnel
 // ─────────────────────────────────────────────────────────────
-const StockMovementModal = ({ data, user, fournisseurs = [], onClose, t, dark, langue }) => {
+const StockMovementModal = ({ data, user, onClose, t, dark, langue }) => {
   const [filterDir, setFilterDir]     = useState('all');
   const [dateFrom,  setDateFrom]      = useState('');
   const [dateTo,    setDateTo]        = useState('');
@@ -4495,13 +3982,6 @@ const StockMovementModal = ({ data, user, fournisseurs = [], onClose, t, dark, l
   const isPorteur = user?.role === 'porteur';
 
   const usdtStock = data.devises.find(d => d.devise === 'USDT') || { quantite: 0, cmup: 0 };
-  const supplierStockSummary = buildSupplierStockSummary(data.transactions || [], fournisseurs);
-  const supplierStockRows = supplierStockSummary.rows;
-  const formatSupplierStock = (value) => {
-    const amount = parseThousands(value);
-    const prefix = amount < 0 ? '-' : '';
-    return `${prefix}${Math.abs(amount).toLocaleString('fr-FR', { maximumFractionDigits: 4 })} USDT`;
-  };
 
   // ── Construire les lignes du registre ──
   const allLines = [...data.transactions]
@@ -4512,11 +3992,10 @@ const StockMovementModal = ({ data, user, fournisseurs = [], onClose, t, dark, l
       const qty   = Math.abs(isIn ? (tx.quantite || 0) : (tx.usdtConsomme || 0));
       const sAvant = tx.stockUsdt_avant ?? 0;
       const sApres = tx.stockUsdt_apres ?? (isIn ? sAvant + qty : sAvant - qty);
-      const supplierStock = supplierStockSummary.movementById.get(tx.id) || null;
       const libelle = isIn
         ? `${t.fundingSupplyLabel}${tx.sourceCompte === 'caisse' ? ` — ${t.caisse}` : ` — ${t.depot}`}${tx.fournisseur ? '  ·  ' + tx.fournisseur : ''}`
-        : `${t.saleMovementLabel} ${tx.deviseVente || ''}${tx.client ? '  ·  ' + tx.client : ''}${tx.fournisseur ? '  ·  ' + tx.fournisseur : ''}`;
-      return { ...tx, isIn, qty, sAvant, sApres, supplierStock, libelle };
+        : `${t.saleMovementLabel} ${tx.deviseVente || ''}${tx.client ? '  ·  ' + tx.client : ''}`;
+      return { ...tx, isIn, qty, sAvant, sApres, libelle };
     });
 
   const rows = allLines.filter(m => {
@@ -4536,15 +4015,13 @@ const StockMovementModal = ({ data, user, fournisseurs = [], onClose, t, dark, l
   const stockVal = usdtStock.quantite * usdtStock.cmup;
 
   const exportCSV = () => {
-    const h = ['Date enregistrement','Date modification','Réf.','Sens','USDT','Stock avant','Stock après','Stock fournisseur avant','Stock fournisseur après','Libellé','Client','Fournisseur','Source','Devise','Qté devise','Taux conv.','Taux achat','Taux vente','Val. achat','Val. vente','Bénéfice','Utilisateur'];
+    const h = ['Date enregistrement','Date modification','Réf.','Sens','USDT','Stock avant','Stock après','Libellé','Client','Fournisseur','Source','Devise','Qté devise','Taux conv.','Taux achat','Taux vente','Val. achat','Val. vente','Bénéfice','Utilisateur'];
     const d = rows.map(m => [
       format(new Date(m.dateEnregistrement || m.date), 'dd/MM/yyyy HH:mm:ss'),
       m.dateModification ? format(new Date(m.dateModification), 'dd/MM/yyyy HH:mm:ss') : '',
       m.id,
       m.isIn ? 'Entrée' : 'Sortie',
       m.qty.toFixed(6), m.sAvant.toFixed(6), m.sApres.toFixed(6),
-      m.supplierStock ? m.supplierStock.before.toFixed(6) : '',
-      m.supplierStock ? m.supplierStock.after.toFixed(6) : '',
       m.libelle, m.client||'', m.fournisseur||'', m.sourceCompte||'',
       m.deviseVente||'', m.quantiteDevise?.toString()||'',
       m.tauxConversion?.toFixed(6)||'', m.taux?.toFixed(6)||'',
@@ -4646,47 +4123,6 @@ const StockMovementModal = ({ data, user, fournisseurs = [], onClose, t, dark, l
             sub={`${t.valeurStock} : ${stockVal.toLocaleString('fr-FR', { maximumFractionDigits: 0 })} XAF`}
             accent={dark ? 'text-amber-400' : 'text-amber-600'}
           />
-        </div>
-
-        {/* ══ Répartition du stock par fournisseur ══ */}
-        <div className={`flex-shrink-0 px-6 py-4 border-b ${th.border}`}>
-          <div className="flex items-center justify-between gap-3 mb-3">
-            <div>
-              <div className={`text-[10px] font-semibold uppercase tracking-widest ${th.faint}`}>{t.supplierStockBreakdown}</div>
-              <div className={`text-xs mt-0.5 ${th.sub}`}>
-                {t.supplierStockAvailable}: {formatSupplierStock(supplierStockSummary.available)}
-                {supplierStockSummary.debt > 0 && (
-                  <span className={dark ? 'text-rose-400' : 'text-rose-600'}>
-                    {' '}• {t.supplierStockDebt}: {formatSupplierStock(-supplierStockSummary.debt)}
-                  </span>
-                )}
-              </div>
-            </div>
-            <span className={`text-xs ${th.faint}`}>{supplierStockRows.length} {langue === 'fr' ? 'fournisseur(s)' : 'supplier(s)'}</span>
-          </div>
-          {supplierStockRows.length === 0 ? (
-            <div className={`text-xs ${th.faint}`}>{t.noSupplierStock}</div>
-          ) : (
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 max-h-32 overflow-y-auto pr-1">
-              {supplierStockRows.map((row) => {
-                const isDebt = row.stock < -0.000001;
-                return (
-                  <div key={row.key} className={`rounded-lg border px-3 py-2 ${th.cardBdr} ${isDebt ? (dark ? 'bg-rose-500/10' : 'bg-rose-50') : th.card}`}>
-                    <div className="flex items-center justify-between gap-3">
-                      <span className={`text-xs font-semibold truncate ${th.ink}`}>{row.name}</span>
-                      <span className={`text-xs font-bold tabular-nums ${isDebt ? (dark ? 'text-rose-400' : 'text-rose-600') : (dark ? 'text-emerald-400' : 'text-emerald-600')}`}>
-                        {formatSupplierStock(row.stock)}
-                      </span>
-                    </div>
-                    <div className={`text-[10px] mt-1 ${th.faint}`}>
-                      +{row.bought.toLocaleString('fr-FR', { maximumFractionDigits: 4 })} / -{row.sold.toLocaleString('fr-FR', { maximumFractionDigits: 4 })}
-                      {isDebt && <span className={dark ? 'text-rose-400' : 'text-rose-600'}> • {t.supplierStockDebt}</span>}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          )}
         </div>
 
         {/* ══ TOOLBAR FILTRES ══ */}
@@ -4865,23 +4301,6 @@ const StockMovementModal = ({ data, user, fournisseurs = [], onClose, t, dark, l
                                   </span>
                                 </div>
                                 <RegRow k={t.stockApres} v={`${m.sApres.toLocaleString('fr-FR', { maximumFractionDigits: 6 })} USDT`} bold th={th} />
-                                {m.supplierStock && (
-                                  <>
-                                    <div className={`my-1 border-t ${th.border}`} />
-                                    <RegRow
-                                      k={t.supplierStockBefore}
-                                      v={`${m.supplierStock.supplierName} · ${formatSupplierStock(m.supplierStock.before)}`}
-                                      th={th}
-                                    />
-                                    <RegRow
-                                      k={t.supplierStockAfter}
-                                      v={`${formatSupplierStock(m.supplierStock.after)}${m.supplierStock.after < 0 ? ` (${t.supplierStockDebt})` : ''}`}
-                                      accent={m.supplierStock.after < 0 ? (dark ? 'text-rose-400' : 'text-rose-600') : (dark ? 'text-emerald-400' : 'text-emerald-600')}
-                                      bold
-                                      th={th}
-                                    />
-                                  </>
-                                )}
                                 <div className={`my-1 border-t ${th.border}`} />
                                 {m.type === 'achat' && <>
                                   <RegRow k={t.tauxAchatXaf} v={`${m.taux?.toLocaleString('fr-FR', { maximumFractionDigits: 6 })} XAF/USDT`} accent={dark ? 'text-blue-400' : 'text-blue-600'} th={th} />
@@ -5715,7 +5134,6 @@ const ClientsPageInline = ({ clients, transactions, dark, langue, tk, onCreateCl
                   entite: extraitClient,
                   transactions: extraitData.transactions,
                   totals: extraitData.totals,
-                  langue,
                 })}
                 style={{display:'flex',alignItems:'center',gap:6,padding:'10px 16px',borderRadius:10,
                   border:`1px solid ${tk.border}`,
@@ -5925,7 +5343,6 @@ const FournisseursPageInline = ({ fournisseurs, transactions, dark, langue, tk, 
                   const aPayer = parseFloat(f.total_a_payer||0);
                   const paye   = parseFloat(f.total_paye||0);
                   const reste  = aPayer - paye;
-                  const supplierStock = parseFloat(f.stock_usdt || 0);
                   const roleRows = supplierRoleSummaryById.get(f.id) || buildRoleLedgerSummary([], 'supplier');
                   return (
                     <tr key={f.id} style={{borderBottom:i<fournisseurs.length-1?`1px solid ${tk.border}`:'none'}}>
@@ -5934,9 +5351,7 @@ const FournisseursPageInline = ({ fournisseurs, transactions, dark, langue, tk, 
                         <div style={{fontWeight:700,color:tk.ink}}>{f.nom}{f.prenom?` ${f.prenom}`:''}</div>
                         <div style={{fontSize:10,color:tk.faint}}>
                           {f.nb_transactions||0} {t.operationsCountLabel} {t.purchaseSaleLabel}
-                          <span style={{color:supplierStock < 0 ? '#EF4444' : tk.faint}}>
-                            {` • ${t.usdtStockTitle}: ${supplierStock.toLocaleString('fr-FR', { maximumFractionDigits: 4 })} USDT${supplierStock < 0 ? ` (${t.supplierStockDebt})` : ''}`}
-                          </span>
+                          {` • ${t.usdtStockTitle}: ${(parseFloat(f.stock_usdt || 0)).toLocaleString('fr-FR', { maximumFractionDigits: 4 })} USDT`}
                         </div>
                       </td>
                       <td style={{padding:'10px 12px',color:tk.sub,whiteSpace:'nowrap'}}>{f.telephone||f.numero||'—'}</td>
@@ -6165,10 +5580,7 @@ const FournisseursPageInline = ({ fournisseurs, transactions, dark, langue, tk, 
               </div>
               <div style={{background:dark?'rgba(34,197,94,0.08)':'rgba(34,197,94,0.05)',borderRadius:8,padding:'7px 10px',border:'1px solid rgba(34,197,94,0.15)'}}>
                 <div style={{fontSize:9,color:'#22C55E',fontWeight:700,marginBottom:2}}>{`📦 ${t.usdtStockTitle}`}</div>
-                <div style={{fontSize:11,fontWeight:700,color:(parseFloat(extraitData.totals?.stock_usdt || 0) < 0 ? '#EF4444' : tk.ink)}}>
-                  {(parseFloat(extraitData.totals?.stock_usdt || 0)).toLocaleString('fr-FR', { maximumFractionDigits: 4 })} USDT
-                  {parseFloat(extraitData.totals?.stock_usdt || 0) < 0 ? ` (${t.supplierStockDebt})` : ''}
-                </div>
+                <div style={{fontSize:11,fontWeight:700,color:tk.ink}}>{(parseFloat(extraitData.totals?.stock_usdt || 0)).toLocaleString('fr-FR', { maximumFractionDigits: 4 })} USDT</div>
                 <div style={{fontSize:9,color:tk.faint}}>
                   +{(parseFloat(extraitData.totals?.total_achats_usdt || 0)).toLocaleString('fr-FR', { maximumFractionDigits: 4 })}
                   {' / -'}
@@ -6324,7 +5736,6 @@ const FournisseursPageInline = ({ fournisseurs, transactions, dark, langue, tk, 
                   transactions: extraitData.transactions,
                   totals: extraitData.totals,
                   cmupUsdt: cmupUsdt || 0,
-                  langue,
                 })}
                 style={{display:'flex',alignItems:'center',gap:6,padding:'10px 16px',borderRadius:10,border:`1px solid ${tk.border}`,background:dark?'rgba(14,165,233,0.1)':'rgba(14,165,233,0.07)',color:'#0EA5E9',cursor:'pointer',fontSize:12,fontWeight:700}}>
                 <Download size={14}/> {t.downloadPdf}
@@ -6763,42 +6174,6 @@ const Dashboard = ({
   const usedLabel = (roleLabel) => langue === 'fr' ? `${roleLabel} utilisé` : `${roleLabel} used`;
   const clientRoleDebtCredit = allocateRoleSituationFromAccounts(clients, visibleTransactions, 'client');
   const supplierRoleDebtCredit = allocateRoleSituationFromAccounts(fournisseurs, visibleTransactions, 'supplier');
-  const supplierStockSummary = buildSupplierStockSummary(visibleTransactions, fournisseurs || []);
-  const supplierStockRows = supplierStockSummary.rows;
-  const supplierStockAvailable = parseThousands(supplierStockSummary.available);
-  const supplierStockDebt = parseThousands(supplierStockSummary.debt);
-  const supplierStockNet = supplierStockAvailable - supplierStockDebt;
-  const supplierStockUnassigned = parseThousands(dashboardRoleMetrics.stock.remaining) - supplierStockNet;
-  const supplierStockPositiveRows = supplierStockRows.filter((row) => parseThousands(row.stock) > 0.0001);
-  const supplierStockDebtRows = supplierStockRows.filter((row) => parseThousands(row.stock) < -0.0001);
-  const supplierStockKpiRows = supplierStockRows.length
-    ? [
-        ...(supplierStockPositiveRows.length
-          ? [
-              { label: langue === 'fr' ? 'Stock fournisseurs' : 'Supplier stock', section: true },
-              ...supplierStockPositiveRows.map((row) => ({
-                label: row.name,
-                value: formatDashboardNumber(row.stock, 4),
-              })),
-            ]
-          : []),
-        ...(supplierStockDebtRows.length
-          ? [
-              { label: langue === 'fr' ? 'Dettes stock' : 'Stock debts', section: true },
-              ...supplierStockDebtRows.map((row) => ({
-                label: row.name,
-                value: formatDashboardSignedNumber(row.stock, 4),
-              })),
-            ]
-          : []),
-        ...(Math.abs(supplierStockUnassigned) > 0.0001
-          ? [
-              { label: langue === 'fr' ? 'Non attribué' : 'Unassigned', section: true },
-              { label: langue === 'fr' ? 'Stock global' : 'Global stock', value: formatDashboardSignedNumber(supplierStockUnassigned, 4) },
-            ]
-          : []),
-      ]
-    : [{ label: t.noSupplierStock, value: '0,0000' }];
 
   // ── Palette thème ──
   const tk = {
@@ -6996,7 +6371,11 @@ const Dashboard = ({
               unit: 'USDT',
               sub: `${langue === 'fr' ? 'Restant' : 'Remaining'} ${formatDashboardNumber(dashboardRoleMetrics.stock.remaining, 2)}`,
               icon: <Warehouse size={18}/>, color: tk.orange, delta: null,
-              rows: supplierStockKpiRows,
+              rows: [
+                { label: usedLabel(dashboardRoleRows[0].label), value: formatDashboardNumber(dashboardRoleMetrics.stock.used.associe, 4) },
+                { label: usedLabel(dashboardRoleRows[1].label), value: formatDashboardNumber(dashboardRoleMetrics.stock.used.porteur, 4) },
+                { label: langue === 'fr' ? 'Stock utilisé' : 'Used stock', value: formatDashboardNumber(stockUsedTotal, 4) },
+              ],
             },
             {
               label: t.caisse,
@@ -7105,21 +6484,10 @@ const Dashboard = ({
                 display: 'grid',
                 gap: 6,
               }}>
-                {(kpi.rows || []).map((row, rowIdx) => row.section ? (
-                  <div key={`${kpi.label}-${rowIdx}`} style={{
-                    fontSize: 9,
-                    color: kpi.color,
-                    fontWeight: 900,
-                    letterSpacing: 0.7,
-                    textTransform: 'uppercase',
-                    paddingTop: rowIdx === 0 ? 0 : 4,
-                  }}>
-                    {row.label}
-                  </div>
-                ) : (
+                {(kpi.rows || []).map((row, rowIdx) => (
                   <div key={`${kpi.label}-${rowIdx}`} style={{ display:'flex', justifyContent:'space-between', gap:8, alignItems:'flex-start' }}>
                     <div style={{ minWidth: 0 }}>
-                      <div style={{ fontSize: 10, color: tk.sub, fontWeight: 700, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>{row.label}</div>
+                      <div style={{ fontSize: 10, color: tk.sub, fontWeight: 700 }}>{row.label}</div>
                       {row.meta && (
                         <div style={{ fontSize: 8, color: tk.faint, marginTop: 2, lineHeight: 1.35 }}>
                           {row.meta}
@@ -7436,7 +6804,7 @@ const Dashboard = ({
                           )}
                           <div style={{ display:'flex', alignItems:'center', gap:6, justifyContent:'flex-end', flexWrap:'wrap' }}>
                             {/* PDF */}
-                            {['vente', 'achat', 'paiement_client', 'paiement_fournisseur'].includes(tx.type) && (
+                            {(tx.type==='vente'||tx.type==='achat') && (
                               <button onClick={()=>{genererFacturePDF(tx,langue);addLog('pdf',`PDF ${tx.id}`,user.id,{opId:tx.id});}} style={{
                                 fontSize:10, fontWeight:700, color: tk.accent,
                                 background:'none', border:'none', cursor:'pointer',
@@ -7791,7 +7159,7 @@ const Dashboard = ({
         <JournalModal logs={logs} onClose={()=>setShowJournal(false)} t={t} dark={dark}/>
       )}
       {showStockMovement && (
-        <StockMovementModal data={data} user={user} fournisseurs={fournisseurs || []}
+        <StockMovementModal data={data} user={user}
           onClose={()=>setShowStockMovement(false)}
           t={t} dark={dark} langue={langue}/>
       )}
@@ -8083,8 +7451,6 @@ export default function App() {
           type: 'vente',
           devise_vente: tx.deviseVente,
           taux_conversion: tx.tauxConversion,
-          cmup_usdt: tx.cmup_usdt ?? tx.cmupUsdt ?? 0,
-          cmup_operation: tx.cmup_operation ?? tx.cmupOperation ?? 'divide',
           quantite_vente: tx.quantiteDevise,
           taux_vente_visible: tx.tauxVisible,
           pct_porteur: pctPorteur,
@@ -8094,6 +7460,8 @@ export default function App() {
           id_client: tx.id_client ?? tx.idClient ?? null,
           taux_vente_cache: tx.tauxCache || null,
           id_fournisseur: tx.id_fournisseur ?? tx.idFournisseur ?? null,
+          cmup_usdt: tx.cmup_usdt,
+          cmup_operation: tx.cmup_operation,
           // Fix 3 : montant_paye = acompte client versé à la vente (créé en paiement_client séparé)
           montant_paye: tx.montant_paye !== undefined ? parseFloat(tx.montant_paye) || 0 : 0,
           date: tx.date || null,
@@ -8212,11 +7580,11 @@ export default function App() {
         id_client: changes.id_client ?? changes.idClient,
         devise_vente: changes.devise_vente ?? changes.deviseVente,
         taux_conversion: changes.taux_conversion ?? changes.tauxConversion,
-        cmup_usdt: changes.cmup_usdt ?? changes.cmupUsdt,
-        cmup_operation: changes.cmup_operation ?? changes.cmupOperation,
         taux_vente_visible: changes.taux_vente_visible ?? changes.tauxVisible,
         taux_vente_cache: changes.taux_vente_cache ?? changes.tauxCache,
         quantite_vente: changes.quantite_vente ?? changes.quantiteDevise,
+        cmup_usdt: changes.cmup_usdt ?? changes.cmupUsdt,
+        cmup_operation: changes.cmup_operation ?? changes.cmupOperation,
         valeur_achat_xaf: changes.valeur_achat_xaf ?? changes.valeurAchat,
         valeur_vente_visible: changes.valeur_vente_visible ?? changes.valeurVenteVisible,
         valeur_vente_cachee: changes.valeur_vente_cachee ?? changes.valeurVenteCachee,
