@@ -2473,12 +2473,21 @@ const TransactionModal = ({ data, profitShare, user, onClose, onSubmit, t, dark,
   const [deviseVente, setDeviseVente] = useState(initialValues?.deviseVente || initialValues?.devise_vente || 'RMB');
   const [tauxConv, setTauxConv] = useState(initialValues?.tauxConversion?.toString() || '');
   const [cmupBaseInput, setCmupBaseInput] = useState(() => {
-    const fallbackCmup = initialValues?.cmup_usdt ?? initialValues?.cmupUsdt ?? data?.devises?.find(d => d.devise === 'USDT')?.cmup ?? 0;
+    const fallbackCmup = initialValues?.ancien_cmup ?? initialValues?.cmup_usdt ?? initialValues?.cmupUsdt ?? data?.devises?.find(d => d.devise === 'USDT')?.cmup ?? 0;
     return fallbackCmup > 0 ? fallbackCmup.toString() : '';
   });
   const [cmupOperation, setCmupOperation] = useState(() => {
-    const op = String(initialValues?.cmup_operation ?? initialValues?.cmupOperation ?? 'divide').toLowerCase();
-    return op === 'multiply' ? 'multiply' : 'divide';
+    const op = String(initialValues?.cmup_operation ?? initialValues?.cmupOperation ?? '').toLowerCase();
+    if (op === 'multiply' || op === 'divide') return op;
+    const initialCmup = parseFloat(initialValues?.ancien_cmup ?? initialValues?.cmup_usdt ?? initialValues?.cmupUsdt ?? 0) || 0;
+    const initialConv = parseFloat(initialValues?.tauxConversion ?? 0) || 0;
+    const initialRate = parseFloat(initialValues?.tauxAchatXAF ?? 0) || 0;
+    if (initialCmup > 0 && initialConv > 0 && initialRate > 0) {
+      const multiplyDiff = Math.abs(initialRate - (initialCmup * initialConv));
+      const divideDiff = Math.abs(initialRate - (initialCmup / initialConv));
+      return multiplyDiff <= divideDiff ? 'multiply' : 'divide';
+    }
+    return 'divide';
   });
   const [tauxAchatXAFInput, setTauxAchatXAFInput] = useState(initialValues?.tauxAchatXAF?.toString() || '');
   const [tauxVisib, setTauxVisib] = useState(initialValues?.tauxVisible?.toString() || '');
@@ -2655,7 +2664,7 @@ const TransactionModal = ({ data, profitShare, user, onClose, onSubmit, t, dark,
         quantiteDevise: qte,
         tauxConversion: conv,
         tauxAchatXAF,
-        cmup_usdt: cmupBase,
+        ancien_cmup: cmupBase,
         cmup_operation: cmupOperation,
         tauxVisible: tvV,
         montant: valVenteV,
@@ -3729,12 +3738,21 @@ const EditModal = ({ transaction, data, allTransactions, onClose, onEdit, t, dar
   const [deviseVente, setDeviseVente] = useState(transaction.deviseVente || 'RMB');
   const [tauxConv, setTauxConv] = useState(transaction.tauxConversion?.toString() || '');
   const [cmupBaseInput, setCmupBaseInput] = useState(() => {
-    const fallbackCmup = transaction.cmup_usdt ?? transaction.cmupUsdt ?? data?.devises?.find(d => d.devise === 'USDT')?.cmup ?? 0;
+    const fallbackCmup = transaction.ancien_cmup ?? transaction.cmup_usdt ?? transaction.cmupUsdt ?? data?.devises?.find(d => d.devise === 'USDT')?.cmup ?? 0;
     return fallbackCmup > 0 ? fallbackCmup.toString() : '';
   });
   const [cmupOperation, setCmupOperation] = useState(() => {
-    const op = String(transaction.cmup_operation ?? transaction.cmupOperation ?? 'divide').toLowerCase();
-    return op === 'multiply' ? 'multiply' : 'divide';
+    const op = String(transaction.cmup_operation ?? transaction.cmupOperation ?? '').toLowerCase();
+    if (op === 'multiply' || op === 'divide') return op;
+    const initialCmup = parseFloat(transaction.ancien_cmup ?? transaction.cmup_usdt ?? transaction.cmupUsdt ?? 0) || 0;
+    const initialConv = parseFloat(transaction.tauxConversion ?? transaction.taux_conversion ?? 0) || 0;
+    const initialRate = parseFloat(transaction.tauxAchatXAF ?? transaction.taux_achat_xaf ?? 0) || 0;
+    if (initialCmup > 0 && initialConv > 0 && initialRate > 0) {
+      const multiplyDiff = Math.abs(initialRate - (initialCmup * initialConv));
+      const divideDiff = Math.abs(initialRate - (initialCmup / initialConv));
+      return multiplyDiff <= divideDiff ? 'multiply' : 'divide';
+    }
+    return 'divide';
   });
   const [tauxAchatXAFInput, setTauxAchatXAFInput] = useState(
     transaction.tauxAchatXAF?.toString() || ''
@@ -3873,10 +3891,8 @@ const EditModal = ({ transaction, data, allTransactions, onClose, onEdit, t, dar
       changes.quantiteDevise  = newQteDevise;
       changes.tauxConversion  = newConv;
       changes.tauxAchatXAF    = tauxAchatXAF;
-      changes.cmup_usdt       = cmupBase;
+      changes.ancien_cmup     = cmupBase;
       changes.cmup_operation  = cmupOperation;
-      changes.cmupUsdt        = cmupBase;
-      changes.cmupOperation   = cmupOperation;
       changes.usdtConsomme    = newUsdtConso;
       changes.quantite        = newUsdtConso;
       changes.client          = clientVal;
@@ -7896,8 +7912,8 @@ const Dashboard = ({
             deviseVente: editTx.deviseVente || editTx.devise_vente,
             tauxConversion: editTx.tauxConversion,
             tauxAchatXAF: editTx.tauxAchatXAF,
-            cmup_usdt: editTx.cmup_usdt,
-            cmup_operation: editTx.cmup_operation,
+            ancien_cmup: editTx.ancien_cmup ?? editTx.cmup_usdt,
+            cmup_operation: editTx.cmup_operation ?? editTx.cmupOperation ?? null,
             tauxVisible: editTx.tauxVisible,
             tauxCache: editTx.tauxCache,
             taux: editTx.taux,
@@ -8022,8 +8038,8 @@ export default function App() {
         deviseVente: tx.devise_vente,
         tauxConversion: parseFloat(tx.taux_conversion || 0),
         tauxAchatXAF: parseFloat(tx.taux_achat_xaf || 0),
-        cmup_usdt: parseFloat(tx.cmup_usdt || 0),
-        cmup_operation: tx.cmup_operation || 'divide',
+        ancien_cmup: parseFloat(tx.ancien_cmup || tx.cmup_usdt || tx.cmupUsdt || 0),
+        cmup_operation: tx.cmup_operation || tx.cmupOperation || null,
         quantiteDevise: parseFloat(tx.quantite_vente || 0),
         tauxVisible: parseFloat(tx.taux_vente_visible || 0),
         tauxCache: parseFloat(tx.taux_vente_cache || 0),
@@ -8163,7 +8179,7 @@ export default function App() {
           devise_vente: tx.deviseVente,
           taux_conversion: tx.tauxConversion,
           quantite_vente: tx.quantiteDevise,
-          cmup_usdt: tx.cmup_usdt ?? tx.cmupUsdt ?? 0,
+          ancien_cmup: tx.ancien_cmup ?? tx.cmup_usdt ?? tx.cmupUsdt ?? 0,
           cmup_operation: tx.cmup_operation ?? tx.cmupOperation ?? 'divide',
           taux_vente_visible: tx.tauxVisible,
           pct_porteur: pctPorteur,
@@ -8291,7 +8307,7 @@ export default function App() {
         id_client: changes.id_client ?? changes.idClient,
         devise_vente: changes.devise_vente ?? changes.deviseVente,
         taux_conversion: changes.taux_conversion ?? changes.tauxConversion,
-        cmup_usdt: changes.cmup_usdt ?? changes.cmupUsdt,
+        ancien_cmup: changes.ancien_cmup ?? changes.cmup_usdt ?? changes.cmupUsdt,
         cmup_operation: changes.cmup_operation ?? changes.cmupOperation,
         taux_vente_visible: changes.taux_vente_visible ?? changes.tauxVisible,
         taux_vente_cache: changes.taux_vente_cache ?? changes.tauxCache,
