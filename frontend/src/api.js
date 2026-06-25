@@ -39,6 +39,9 @@ export const apiLoadAll = async () => {
 export const apiCreateTransaction = async (payload) => handle(await fetch(`${BASE_URL}/transactions`, { method:'POST', headers:headers(), body:JSON.stringify(payload) }));
 export const apiFinaliserVente = async (txId, d) => handle(await fetch(`${BASE_URL}/transactions/${txId}/finaliser`, { method:'PUT', headers:headers(), body:JSON.stringify({taux_vente_cache:d.tauxCache,pct_porteur:d.porteurPctC,pct_associe:d.associePctC}) }));
 export const apiEditTransaction = async (txId, changes) => handle(await fetch(`${BASE_URL}/transactions/${txId}/edit`, { method:'PUT', headers:headers(), body:JSON.stringify(changes) }));
+export const apiDeleteTransaction = async (txId) => {
+  return handle(await fetch(`${BASE_URL}/transactions/delete/${txId}`, { method:'DELETE', headers:headers() }));
+};
 export const apiValiderAssoc = async (txId) => handle(await fetch(`${BASE_URL}/transactions/${txId}/valider-assoc`, { method:'PUT', headers:headers() }));
 export const apiValiderTransaction = async (txId, paymentStatus, montantPaye=null) => handle(await fetch(`${BASE_URL}/transactions/${txId}/valider`, { method:'PUT', headers:headers(), body:JSON.stringify({payment_status:paymentStatus,...(montantPaye!==null&&{montant_paye:montantPaye})}) }));
 

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   apiLogin, apiLogout, apiLoadAll,
-  apiCreateTransaction, apiFinaliserVente, apiEditTransaction,
+  apiCreateTransaction, apiFinaliserVente, apiEditTransaction, apiDeleteTransaction,
   apiUpdateCmup, apiUpdateProfitShare, apiRegister, apiCheckSlots,
   apiValiderAssoc, apiValiderTransaction,
   // v5.6.0+ nouveaux endpoints
@@ -2472,6 +2472,14 @@ const TransactionModal = ({ data, profitShare, user, onClose, onSubmit, t, dark,
   // ── Fix 5 : État VENTE pré-rempli si édition ──
   const [deviseVente, setDeviseVente] = useState(initialValues?.deviseVente || initialValues?.devise_vente || 'RMB');
   const [tauxConv, setTauxConv] = useState(initialValues?.tauxConversion?.toString() || '');
+  const [cmupBaseInput, setCmupBaseInput] = useState(() => {
+    const fallbackCmup = initialValues?.cmup_usdt ?? initialValues?.cmupUsdt ?? data?.devises?.find(d => d.devise === 'USDT')?.cmup ?? 0;
+    return fallbackCmup > 0 ? fallbackCmup.toString() : '';
+  });
+  const [cmupOperation, setCmupOperation] = useState(() => {
+    const op = String(initialValues?.cmup_operation ?? initialValues?.cmupOperation ?? 'divide').toLowerCase();
+    return op === 'multiply' ? 'multiply' : 'divide';
+  });
   const [tauxAchatXAFInput, setTauxAchatXAFInput] = useState(initialValues?.tauxAchatXAF?.toString() || '');
   const [tauxVisib, setTauxVisib] = useState(initialValues?.tauxVisible?.toString() || '');
   const [customShareV, setCustomShareV] = useState(Boolean(isEdit));
@@ -2527,10 +2535,15 @@ const TransactionModal = ({ data, profitShare, user, onClose, onSubmit, t, dark,
   const stockDisponibleEdition = stockActuel + ancienneConsoEdit;
   const qte         = parseFloat(form.quantite) || 0;
   const conv        = parseFloat(tauxConv) || 0;
+  const cmupBase    = parseFloat(cmupBaseInput) || 0;
   const tvV         = parseThousands(tauxVisib) || 0;
-  const usdtConso   = conv > 0 ? qte / conv : 0;
-  const tauxAchatXAF = conv > 0 ? cmupUsdt / conv : (parseFloat(tauxAchatXAFInput) || 0);
-  const valAchat    = usdtConso * cmupUsdt;
+  const usdtConso   = conv > 0
+    ? (cmupOperation === 'multiply' ? qte * conv : qte / conv)
+    : 0;
+  const tauxAchatXAF = conv > 0 && cmupBase > 0
+    ? (cmupOperation === 'multiply' ? cmupBase * conv : cmupBase / conv)
+    : (parseFloat(tauxAchatXAFInput) || 0);
+  const valAchat    = qte * tauxAchatXAF;
   const valVenteV   = qte * tvV;
   const benV        = valVenteV - valAchat;
   const pctPV       = customShareV ? porteurPctV : profitShare.porteur;
@@ -2574,8 +2587,12 @@ const TransactionModal = ({ data, profitShare, user, onClose, onSubmit, t, dark,
     const clean = val.replace(/[^0-9.]/g, '');
     setTauxConv(clean);
     const v = parseFloat(clean);
-    if (v > 0 && cmupUsdt > 0) {
-      setTauxAchatXAFInput((cmupUsdt / v).toFixed(6));
+    if (v > 0 && cmupBase > 0) {
+      setTauxAchatXAFInput(
+        cmupOperation === 'multiply'
+          ? (cmupBase * v).toFixed(6)
+          : (cmupBase / v).toFixed(6)
+      );
     } else {
       setTauxAchatXAFInput('');
     }
@@ -2585,12 +2602,28 @@ const TransactionModal = ({ data, profitShare, user, onClose, onSubmit, t, dark,
     const clean = val.replace(/[^0-9.]/g, '');
     setTauxAchatXAFInput(clean);
     const v = parseFloat(clean);
-    if (v > 0 && cmupUsdt > 0) {
-      setTauxConv((cmupUsdt / v).toFixed(6));
+    if (v > 0 && cmupBase > 0) {
+      setTauxConv(
+        cmupOperation === 'multiply'
+          ? (v / cmupBase).toFixed(6)
+          : (cmupBase / v).toFixed(6)
+      );
     } else {
       setTauxConv('');
     }
   };
+
+  React.useEffect(() => {
+    const convValue = parseFloat(tauxConv) || 0;
+    const cmupValue = parseFloat(cmupBaseInput) || 0;
+    if (convValue > 0 && cmupValue > 0) {
+      setTauxAchatXAFInput(
+        cmupOperation === 'multiply'
+          ? (cmupValue * convValue).toFixed(6)
+          : (cmupValue / convValue).toFixed(6)
+      );
+    }
+  }, [cmupBaseInput, cmupOperation, tauxConv]);
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -2622,6 +2655,8 @@ const TransactionModal = ({ data, profitShare, user, onClose, onSubmit, t, dark,
         quantiteDevise: qte,
         tauxConversion: conv,
         tauxAchatXAF,
+        cmup_usdt: cmupBase,
+        cmup_operation: cmupOperation,
         tauxVisible: tvV,
         montant: valVenteV,
         valeurAchat: valAchat,
@@ -2866,16 +2901,37 @@ const TransactionModal = ({ data, profitShare, user, onClose, onSubmit, t, dark,
                 <p className={`text-xs font-bold uppercase tracking-wide ${dark ? 'text-gray-400' : 'text-gray-500'}`}>
                   {t.linkedRates}
                 </p>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className={`block text-xs font-semibold mb-1.5 ${dark ? 'text-gray-300' : 'text-gray-600'}`}>
-                      {t.tauxConversion} ({deviseVente}/USDT)
-                    </label>
-                    <input type="text" inputMode="decimal"
-                      placeholder={deviseVente === 'RMB' ? 'Ex: 6.94' : 'Ex: 1.08'}
-                      value={tauxConv}
-                      onChange={e => handleTauxConvChange(e.target.value)}
-                      className={`w-full px-3 py-2.5 rounded-xl border-2 text-sm outline-none transition-all ${dark ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-200 bg-white'} focus:border-accent`} />
+                <div className="grid grid-cols-1 lg:grid-cols-[1.1fr_0.9fr] gap-3">
+                  <div className="space-y-3">
+                    <div className="flex items-end gap-2">
+                      <div className="flex-1">
+                        <label className={`block text-xs font-semibold mb-1.5 ${dark ? 'text-gray-300' : 'text-gray-600'}`}>
+                          CMUP (XAF/USDT)
+                        </label>
+                        <input type="text" inputMode="decimal"
+                          placeholder={`Ex: ${cmupUsdt.toLocaleString('fr-FR', { maximumFractionDigits: 2 })}`}
+                          value={cmupBaseInput}
+                          onChange={e => setCmupBaseInput(e.target.value.replace(/[^0-9.]/g, ''))}
+                          className={`w-full px-3 py-2 rounded-xl border-2 text-sm outline-none transition-all ${dark ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-200 bg-white'} focus:border-accent`} />
+                      </div>
+                      <select
+                        value={cmupOperation}
+                        onChange={e => setCmupOperation(e.target.value === 'multiply' ? 'multiply' : 'divide')}
+                        className={`w-16 px-2 py-2 rounded-xl border-2 text-sm font-bold outline-none transition-all ${dark ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-200 bg-white'} focus:border-accent`}>
+                        <option value="divide">÷</option>
+                        <option value="multiply">×</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className={`block text-xs font-semibold mb-1.5 ${dark ? 'text-gray-300' : 'text-gray-600'}`}>
+                        {t.tauxConversion} ({deviseVente}/USDT)
+                      </label>
+                      <input type="text" inputMode="decimal"
+                        placeholder={deviseVente === 'RMB' ? 'Ex: 6.94' : 'Ex: 1.08'}
+                        value={tauxConv}
+                        onChange={e => handleTauxConvChange(e.target.value)}
+                        className={`w-full px-3 py-2.5 rounded-xl border-2 text-sm outline-none transition-all ${dark ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-200 bg-white'} focus:border-accent`} />
+                    </div>
                   </div>
                   <div>
                     <label className={`block text-xs font-semibold mb-1.5 ${dark ? 'text-gray-300' : 'text-gray-600'}`}>
@@ -3672,6 +3728,14 @@ const EditModal = ({ transaction, data, allTransactions, onClose, onEdit, t, dar
   // ── État VENTE ──
   const [deviseVente, setDeviseVente] = useState(transaction.deviseVente || 'RMB');
   const [tauxConv, setTauxConv] = useState(transaction.tauxConversion?.toString() || '');
+  const [cmupBaseInput, setCmupBaseInput] = useState(() => {
+    const fallbackCmup = transaction.cmup_usdt ?? transaction.cmupUsdt ?? data?.devises?.find(d => d.devise === 'USDT')?.cmup ?? 0;
+    return fallbackCmup > 0 ? fallbackCmup.toString() : '';
+  });
+  const [cmupOperation, setCmupOperation] = useState(() => {
+    const op = String(transaction.cmup_operation ?? transaction.cmupOperation ?? 'divide').toLowerCase();
+    return op === 'multiply' ? 'multiply' : 'divide';
+  });
   const [tauxAchatXAFInput, setTauxAchatXAFInput] = useState(
     transaction.tauxAchatXAF?.toString() || ''
   );
@@ -3724,10 +3788,15 @@ const EditModal = ({ transaction, data, allTransactions, onClose, onEdit, t, dar
   const stockActuel = usdtStock ? usdtStock.quantite : 0;
   const qte  = parseFloat(quantiteDeviseEdit || transaction.quantiteDevise || 0);
   const conv = parseFloat(tauxConv) || 0;
+  const cmupBase = parseFloat(cmupBaseInput) || 0;
   const tvV  = parseFloat(tauxVisib) || 0;
-  const usdtConso  = conv > 0 ? qte / conv : 0;
-  const tauxAchatXAF = conv > 0 ? cmupUsdt / conv : (parseFloat(tauxAchatXAFInput) || 0);
-  const valAchat   = usdtConso * cmupUsdt;
+  const usdtConso  = conv > 0
+    ? (cmupOperation === 'multiply' ? qte * conv : qte / conv)
+    : 0;
+  const tauxAchatXAF = conv > 0 && cmupBase > 0
+    ? (cmupOperation === 'multiply' ? cmupBase * conv : cmupBase / conv)
+    : (parseFloat(tauxAchatXAFInput) || 0);
+  const valAchat   = qte * tauxAchatXAF;
   const valVenteV  = qte * tvV;
   const benV       = valVenteV - valAchat;
   const pctPV      = customShareV ? porteurPctV : (transaction.porteurPct ?? 70);
@@ -3754,16 +3823,28 @@ const EditModal = ({ transaction, data, allTransactions, onClose, onEdit, t, dar
     const clean = val.replace(/[^0-9.]/g, '');
     setTauxConv(clean);
     const v = parseFloat(clean);
-    if (v > 0 && cmupUsdt > 0) setTauxAchatXAFInput((cmupUsdt / v).toFixed(6));
+    if (v > 0 && cmupBase > 0) setTauxAchatXAFInput(cmupOperation === 'multiply' ? (cmupBase * v).toFixed(6) : (cmupBase / v).toFixed(6));
     else setTauxAchatXAFInput('');
   };
   const handleTauxAchatChange = (val) => {
     const clean = val.replace(/[^0-9.]/g, '');
     setTauxAchatXAFInput(clean);
     const v = parseFloat(clean);
-    if (v > 0 && cmupUsdt > 0) setTauxConv((cmupUsdt / v).toFixed(6));
+    if (v > 0 && cmupBase > 0) setTauxConv(cmupOperation === 'multiply' ? (v / cmupBase).toFixed(6) : (cmupBase / v).toFixed(6));
     else setTauxConv('');
   };
+
+  React.useEffect(() => {
+    const convValue = parseFloat(tauxConv) || 0;
+    const cmupValue = parseFloat(cmupBaseInput) || 0;
+    if (convValue > 0 && cmupValue > 0) {
+      setTauxAchatXAFInput(
+        cmupOperation === 'multiply'
+          ? (cmupValue * convValue).toFixed(6)
+          : (cmupValue / convValue).toFixed(6)
+      );
+    }
+  }, [cmupBaseInput, cmupOperation, tauxConv]);
 
   const handleSubmit = (e) => {
     e.preventDefault();
@@ -3780,7 +3861,9 @@ const EditModal = ({ transaction, data, allTransactions, onClose, onEdit, t, dar
       }
       const newQteDevise = qte;
       const newConv = conv;
-      const newUsdtConso = conv > 0 ? newQteDevise / newConv : transaction.usdtConsomme;
+      const newUsdtConso = newConv > 0
+        ? (cmupOperation === 'multiply' ? newQteDevise * newConv : newQteDevise / newConv)
+        : transaction.usdtConsomme;
       const newDelta = -newUsdtConso;
       const sim = simulerChaineStock(allTransactions, transaction.id, newDelta);
       if (!sim.valid) {
@@ -3790,6 +3873,10 @@ const EditModal = ({ transaction, data, allTransactions, onClose, onEdit, t, dar
       changes.quantiteDevise  = newQteDevise;
       changes.tauxConversion  = newConv;
       changes.tauxAchatXAF    = tauxAchatXAF;
+      changes.cmup_usdt       = cmupBase;
+      changes.cmup_operation  = cmupOperation;
+      changes.cmupUsdt        = cmupBase;
+      changes.cmupOperation   = cmupOperation;
       changes.usdtConsomme    = newUsdtConso;
       changes.quantite        = newUsdtConso;
       changes.client          = clientVal;
@@ -3922,14 +4009,34 @@ const EditModal = ({ transaction, data, allTransactions, onClose, onEdit, t, dar
                 <p className={`text-xs font-bold uppercase tracking-wide ${dark ? 'text-gray-400' : 'text-gray-500'}`}>
                   {langue === 'fr' ? 'Taux — modifier l\'un recalcule l\'autre' : 'Rates — editing one recalculates the other'}
                 </p>
-                <div className="grid grid-cols-2 gap-3">
-                  <div>
-                    <label className={`block text-xs font-semibold mb-1.5 ${dark ? 'text-gray-300' : 'text-gray-600'}`}>
-                      {t.tauxConversion} ({deviseVente}/USDT)
-                    </label>
-                    <input type="text" inputMode="decimal"
-                      value={tauxConv} onChange={e => handleTauxConvChange(e.target.value)}
-                      className={`w-full px-3 py-2.5 rounded-xl border-2 text-sm outline-none transition-all ${dark ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-200 bg-white'} focus:border-accent`} />
+                <div className="grid grid-cols-1 lg:grid-cols-[1.1fr_0.9fr] gap-3">
+                  <div className="space-y-3">
+                    <div className="flex items-end gap-2">
+                      <div className="flex-1">
+                        <label className={`block text-xs font-semibold mb-1.5 ${dark ? 'text-gray-300' : 'text-gray-600'}`}>
+                          CMUP (XAF/USDT)
+                        </label>
+                        <input type="text" inputMode="decimal"
+                          value={cmupBaseInput}
+                          onChange={e => setCmupBaseInput(e.target.value.replace(/[^0-9.]/g, ''))}
+                          className={`w-full px-3 py-2 rounded-xl border-2 text-sm outline-none transition-all ${dark ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-200 bg-white'} focus:border-accent`} />
+                      </div>
+                      <select
+                        value={cmupOperation}
+                        onChange={e => setCmupOperation(e.target.value === 'multiply' ? 'multiply' : 'divide')}
+                        className={`w-16 px-2 py-2 rounded-xl border-2 text-sm font-bold outline-none transition-all ${dark ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-200 bg-white'} focus:border-accent`}>
+                        <option value="divide">÷</option>
+                        <option value="multiply">×</option>
+                      </select>
+                    </div>
+                    <div>
+                      <label className={`block text-xs font-semibold mb-1.5 ${dark ? 'text-gray-300' : 'text-gray-600'}`}>
+                        {t.tauxConversion} ({deviseVente}/USDT)
+                      </label>
+                      <input type="text" inputMode="decimal"
+                        value={tauxConv} onChange={e => handleTauxConvChange(e.target.value)}
+                        className={`w-full px-3 py-2.5 rounded-xl border-2 text-sm outline-none transition-all ${dark ? 'border-gray-600 bg-gray-700 text-white' : 'border-gray-200 bg-white'} focus:border-accent`} />
+                    </div>
                   </div>
                   <div>
                     <label className={`block text-xs font-semibold mb-1.5 ${dark ? 'text-gray-300' : 'text-gray-600'}`}>
@@ -5054,6 +5161,7 @@ const ClientsPageInline = ({ clients, transactions, dark, langue, tk, onCreateCl
   const [extraitData, setExtraitData] = useState(null);
   const [extraitClient, setExtraitClient] = useState(null);
   const [editClient, setEditClient] = useState(null);
+  const [showClientAlerts, setShowClientAlerts] = useState(false);
   const [showPayClient, setShowPayClient] = useState(null);
   const [payClientAPayer, setPayClientAPayer] = useState('');
   const [payClientPaye, setPayClientPaye] = useState('');
@@ -5149,6 +5257,16 @@ const ClientsPageInline = ({ clients, transactions, dark, langue, tk, onCreateCl
       buildRoleLedgerSummary((transactions || []).filter((tx) => matchClientTransaction(tx, client)), 'client'),
     ])
   );
+  const debtorClients = (clients || [])
+    .map((client) => {
+      const totalDue = parseFloat(client.total_a_payer || 0);
+      const totalPaid = parseFloat(client.total_paye || 0);
+      const remaining = getRemainingBalance(totalDue, totalPaid);
+      return { ...client, totalDue, totalPaid, remaining };
+    })
+    .filter((client) => client.remaining > 0.0001)
+    .sort((a, b) => b.remaining - a.remaining || (a.nom || '').localeCompare(b.nom || ''));
+  const debtorClientsTotal = debtorClients.reduce((sum, client) => sum + client.remaining, 0);
   const renderRoleAmountCell = (roleRows, total, color, accessor, totalFormatter = null) => {
     const formattedTotal = totalFormatter
       ? totalFormatter(total)
@@ -5175,14 +5293,23 @@ const ClientsPageInline = ({ clients, transactions, dark, langue, tk, onCreateCl
   return (
     <div style={{display:'flex',flexDirection:'column',gap:16}}>
       {/* Header */}
-      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',gap:12,flexWrap:'wrap'}}>
         <h2 style={{margin:0,fontSize:16,fontWeight:800,color:tk.ink,display:'flex',alignItems:'center',gap:8}}>
           <Users size={18} color={tk.accent}/> {t.manageClients}
           <span style={{fontSize:11,fontWeight:500,color:tk.faint}}>({clients.length})</span>
         </h2>
-        <button onClick={()=>setShowForm(v=>!v)} style={{display:'flex',alignItems:'center',gap:6,padding:'8px 14px',borderRadius:8,border:'none',background:tk.accent,color:'#0A1628',cursor:'pointer',fontSize:11,fontWeight:700}}>
-          <Plus size={14}/> {t.newClient}
-        </button>
+        <div style={{display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+          <button
+            onClick={()=>setShowClientAlerts(v=>!v)}
+            disabled={debtorClients.length === 0}
+            title={langue === 'fr' ? 'Voir les clients débiteurs' : 'View debtors'}
+            style={{display:'flex',alignItems:'center',gap:4,padding:'4px 8px',borderRadius:6,border:'1px solid #F59E0B',background:'rgba(245,158,11,0.1)',color:'#F59E0B',cursor:debtorClients.length === 0 ? 'default' : 'pointer',fontSize:10,fontWeight:700,opacity:debtorClients.length === 0 ? 0.55 : 1}}>
+            🔔 {langue === 'fr' ? 'Alertes' : 'Alerts'} ({debtorClients.length})
+          </button>
+          <button onClick={()=>setShowForm(v=>!v)} style={{display:'flex',alignItems:'center',gap:6,padding:'8px 14px',borderRadius:8,border:'none',background:tk.accent,color:'#0A1628',cursor:'pointer',fontSize:11,fontWeight:700}}>
+            <Plus size={14}/> {t.newClient}
+          </button>
+        </div>
       </div>
 
       {/* Formulaire création */}
@@ -5274,6 +5401,74 @@ const ClientsPageInline = ({ clients, transactions, dark, langue, tk, onCreateCl
                 })}
               </tbody>
             </table>
+          </div>
+        </div>
+      )}
+
+      {/* Modal alertes clients */}
+      {showClientAlerts && (
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.55)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:999}}>
+          <div style={{background:tk.card,borderRadius:16,padding:24,width:'94%',maxWidth:860,maxHeight:'85vh',overflow:'auto',border:`1px solid ${tk.border}`}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:16}}>
+              <div>
+                <h3 style={{margin:0,fontSize:14,fontWeight:800,color:tk.ink}}>Clients debiteurs</h3>
+                <div style={{fontSize:11,color:tk.faint}}>
+                  {debtorClients.length} client(s) • {Math.round(debtorClientsTotal).toLocaleString('fr-FR')} XAF
+                </div>
+              </div>
+              <button onClick={()=>setShowClientAlerts(false)} style={{background:'none',border:'none',cursor:'pointer',color:tk.faint}}><X size={16}/></button>
+            </div>
+            {debtorClients.length === 0 ? (
+              <div style={{padding:'18px 0',textAlign:'center',color:tk.faint,fontSize:13}}>Aucun client debiteur</div>
+            ) : (
+              <div style={{display:'flex',flexDirection:'column',gap:10}}>
+                {debtorClients.map((c) => (
+                  <div key={c.id} style={{border:`1px solid ${tk.border}`,borderRadius:12,padding:14,background:dark?'rgba(255,255,255,0.02)':'#F8FAFF'}}>
+                    <div style={{display:'flex',justifyContent:'space-between',gap:12,alignItems:'flex-start',flexWrap:'wrap'}}>
+                      <div style={{minWidth:0}}>
+                        <div style={{fontWeight:800,color:tk.ink}}>
+                          {c.nom}{c.prenom?` ${c.prenom}`:''}
+                          <span style={{fontSize:10,fontWeight:600,color:tk.faint,marginLeft:8}}>{fmtNum(c.id)}</span>
+                        </div>
+                        <div style={{fontSize:10,color:tk.faint,marginTop:3}}>
+                          {c.telephone || c.numero || '—'} • {c.adresse || c.ville || '—'} • {c.nb_transactions || 0} {t.salesCountLabel}
+                        </div>
+                      </div>
+                      <div style={{textAlign:'right'}}>
+                        <div style={{fontWeight:800,color:'#F59E0B'}}>
+                          {Math.round(c.remaining).toLocaleString('fr-FR')} XAF
+                        </div>
+                        <div style={{fontSize:10,color:tk.faint,marginTop:3}}>
+                          Dû {Math.round(c.totalDue).toLocaleString('fr-FR')} XAF • Reçu {Math.round(c.totalPaid).toLocaleString('fr-FR')} XAF
+                        </div>
+                      </div>
+                    </div>
+                    <div style={{display:'flex',justifyContent:'flex-end',gap:8,marginTop:12,flexWrap:'wrap'}}>
+                      <button
+                        onClick={()=>{
+                          const reste2 = getRemainingBalance(c.total_a_payer, c.total_paye);
+                          setShowClientAlerts(false);
+                          setShowPayClient(c);
+                          setPayClientAPayer(reste2>0 ? Math.round(reste2).toString() : '');
+                          setPayClientPaye('');
+                          setPayClientDate('');
+                        }}
+                        style={{display:'flex',alignItems:'center',gap:4,padding:'4px 8px',borderRadius:6,border:'1px solid #22C55E',background:'rgba(34,197,94,0.1)',color:'#22C55E',cursor:'pointer',fontSize:10,fontWeight:700}}>
+                        💳 {t.pay}
+                      </button>
+                      <button
+                        onClick={()=>{
+                          setShowClientAlerts(false);
+                          handleExtrait(c);
+                        }}
+                        style={{display:'flex',alignItems:'center',gap:4,padding:'4px 8px',borderRadius:6,border:'1px solid #D4AF37',background:'rgba(212,175,55,0.1)',color:tk.accent,cursor:'pointer',fontSize:10,fontWeight:700}}>
+                        <FileText size={12}/> {t.statement}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -6456,7 +6651,7 @@ const DistributionPageInline = ({ distributionDetails, distributionActive, dark,
 // ─────────────────────────────────────────────────────────────
 const Dashboard = ({
   user, data, profitShare, t, langue, setLangue, dark, setDark, logs, addLog,
-  onLogout, onTransaction, onUpdateProfitShare, onFinalize, onEditTransaction, onCmupUpdate,
+  onLogout, onTransaction, onUpdateProfitShare, onFinalize, onEditTransaction, onDeleteTransaction, onCmupUpdate,
   clients, fournisseurs, devises, distributionDetails, distributionActive,
   onCreateClient, onDeleteClient, onUpdateClient, onPayClient, onReloadClients,
   onCreateFournisseur, onDeleteFournisseur, onUpdateFournisseur, onPayFourn, onReloadFournisseurs,
@@ -6644,7 +6839,6 @@ const Dashboard = ({
   const supplierStockNet = supplierStockAvailable - supplierStockDebt;
   const supplierStockUnassigned = parseThousands(dashboardRoleMetrics.stock.remaining) - supplierStockNet;
   const supplierStockPositiveRows = supplierStockRows.filter((row) => parseThousands(row.stock) > 0.0001);
-  const supplierStockDebtRows = supplierStockRows.filter((row) => parseThousands(row.stock) < -0.0001);
   const supplierStockKpiRows = supplierStockRows.length
     ? [
         ...(supplierStockPositiveRows.length
@@ -6653,15 +6847,6 @@ const Dashboard = ({
               ...supplierStockPositiveRows.map((row) => ({
                 label: row.name,
                 value: formatDashboardNumber(row.stock, 4),
-              })),
-            ]
-          : []),
-        ...(supplierStockDebtRows.length
-          ? [
-              { label: langue === 'fr' ? 'Dettes stock' : 'Stock debts', section: true },
-              ...supplierStockDebtRows.map((row) => ({
-                label: row.name,
-                value: formatDashboardSignedNumber(row.stock, 4),
               })),
             ]
           : []),
@@ -7353,13 +7538,29 @@ const Dashboard = ({
                             )}
 
                             {/* ✏️ Bouton MODIFIER — visible seulement si pas verrouillé */}
-                            {canEditTx && (
+                            {canEditTx && (<>
                               <button onClick={()=>setEditTx(tx)} style={{
-                                fontSize:10, fontWeight:600, padding:'3px 8px',
+                                fontSize:10, fontWeight:700, padding:'3px 9px',
                                 borderRadius:6, border:`1px solid ${tk.border}`, cursor:'pointer',
                                 background: tk.cardB, color: tk.sub,
                                 display:'flex', alignItems:'center', gap:3,
                               }}><Edit2 size={10}/>{t.modifierTx}</button>
+                              <button onClick={async () => {
+                                if (!window.confirm(langue === 'fr' ? 'Supprimer cette opération ?' : 'Delete this operation?')) return;
+                                try {
+                                  await onDeleteTransaction(tx.id);
+                                  toast.success(langue === 'fr' ? 'Opération supprimée' : 'Operation deleted');
+                                } catch(e) { toast.error(e.message || 'Erreur'); }
+                              }} style={{
+                                fontSize:10, fontWeight:700, padding:'3px 9px',
+                                borderRadius:6, border:'none', cursor:'pointer',
+                                background:'#EF4444', color:'#fff',
+                                display:'flex', alignItems:'center', gap:3,
+                              }} title={langue === 'fr' ? 'Supprimer l\'opération' : 'Delete operation'}>
+                                <Trash2 size={10} strokeWidth={2.5}/>
+                                {langue === 'fr' ? 'Supprimer' : 'Delete'}
+                              </button>
+                              </>
                             )}
                           </div>
                         </div>
@@ -7695,6 +7896,8 @@ const Dashboard = ({
             deviseVente: editTx.deviseVente || editTx.devise_vente,
             tauxConversion: editTx.tauxConversion,
             tauxAchatXAF: editTx.tauxAchatXAF,
+            cmup_usdt: editTx.cmup_usdt,
+            cmup_operation: editTx.cmup_operation,
             tauxVisible: editTx.tauxVisible,
             tauxCache: editTx.tauxCache,
             taux: editTx.taux,
@@ -7819,6 +8022,8 @@ export default function App() {
         deviseVente: tx.devise_vente,
         tauxConversion: parseFloat(tx.taux_conversion || 0),
         tauxAchatXAF: parseFloat(tx.taux_achat_xaf || 0),
+        cmup_usdt: parseFloat(tx.cmup_usdt || 0),
+        cmup_operation: tx.cmup_operation || 'divide',
         quantiteDevise: parseFloat(tx.quantite_vente || 0),
         tauxVisible: parseFloat(tx.taux_vente_visible || 0),
         tauxCache: parseFloat(tx.taux_vente_cache || 0),
@@ -7958,6 +8163,8 @@ export default function App() {
           devise_vente: tx.deviseVente,
           taux_conversion: tx.tauxConversion,
           quantite_vente: tx.quantiteDevise,
+          cmup_usdt: tx.cmup_usdt ?? tx.cmupUsdt ?? 0,
+          cmup_operation: tx.cmup_operation ?? tx.cmupOperation ?? 'divide',
           taux_vente_visible: tx.tauxVisible,
           pct_porteur: pctPorteur,
           pct_associe: pctAssocie,
@@ -8084,6 +8291,8 @@ export default function App() {
         id_client: changes.id_client ?? changes.idClient,
         devise_vente: changes.devise_vente ?? changes.deviseVente,
         taux_conversion: changes.taux_conversion ?? changes.tauxConversion,
+        cmup_usdt: changes.cmup_usdt ?? changes.cmupUsdt,
+        cmup_operation: changes.cmup_operation ?? changes.cmupOperation,
         taux_vente_visible: changes.taux_vente_visible ?? changes.tauxVisible,
         taux_vente_cache: changes.taux_vente_cache ?? changes.tauxCache,
         quantite_vente: changes.quantite_vente ?? changes.quantiteDevise,
@@ -8108,6 +8317,16 @@ export default function App() {
       toast.success(langue === 'fr' ? 'Modifié ✓' : 'Updated ✓');
     } catch (err) {
       toast.error(err.message);
+    }
+  };
+
+  const handleDeleteTransaction = async (txId) => {
+    try {
+      await apiDeleteTransaction(txId);
+      await loadDataFromAPI();
+      addLog('suppression', `Transaction supprimée : ${txId}`, user?.id, { opId: txId });
+    } catch (err) {
+      throw err;
     }
   };
 
@@ -8236,6 +8455,7 @@ export default function App() {
         onUpdateProfitShare={handleUpdateProfitShare}
         onFinalize={handleFinalize}
         onEditTransaction={handleEditTransaction}
+        onDeleteTransaction={handleDeleteTransaction}
         onCmupUpdate={handleCmupUpdate}
         t={t} langue={langue} setLangue={setLangue} dark={dark} setDark={setDark} logs={logs} addLog={addLog}
         clients={clients} fournisseurs={fournisseurs} devises={devises}

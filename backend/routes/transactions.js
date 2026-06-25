@@ -136,6 +136,8 @@ function normalizeEditPayload(body = {}) {
   if (normalized.idClient !== undefined && normalized.client_id === undefined) normalized.client_id = normalized.idClient;
   if (normalized.deviseVente !== undefined && normalized.devise_vente === undefined) normalized.devise_vente = normalized.deviseVente;
   if (normalized.tauxConversion !== undefined && normalized.taux_conversion === undefined) normalized.taux_conversion = normalized.tauxConversion;
+  if (normalized.cmupUsdt !== undefined && normalized.cmup_usdt === undefined) normalized.cmup_usdt = normalized.cmupUsdt;
+  if (normalized.cmupOperation !== undefined && normalized.cmup_operation === undefined) normalized.cmup_operation = normalized.cmupOperation;
   if (normalized.tauxVisible !== undefined && normalized.taux_vente_visible === undefined) normalized.taux_vente_visible = normalized.tauxVisible;
   if (normalized.tauxCache !== undefined && normalized.taux_vente_cache === undefined) normalized.taux_vente_cache = normalized.tauxCache;
   if (normalized.quantiteDevise !== undefined && normalized.quantite_vente === undefined) normalized.quantite_vente = normalized.quantiteDevise;
@@ -348,12 +350,16 @@ function projectSaleRow(row, stockBefore, cmupBefore) {
   const tauxConversion = toNumber(row.taux_conversion, NaN);
   const tauxVisible = toNumber(row.taux_vente_visible, NaN);
   const tauxCacheInput = toNumber(row.taux_vente_cache, NaN);
+  const cmupBase = toNumber(row.cmup_usdt, cmupBefore);
+  const operation = String(row.cmup_operation || 'divide').toLowerCase() === 'multiply' ? 'multiply' : 'divide';
 
   if (!(quantiteVente > 0)) throw badRequest('Quantité de vente invalide');
   if (!(tauxConversion > 0)) throw badRequest('Taux de conversion invalide');
   if (!(tauxVisible > 0)) throw badRequest('Taux de vente invalide');
 
-  const usdtConsomme = quantiteVente / tauxConversion;
+  const usdtConsomme = operation === 'multiply'
+    ? quantiteVente * tauxConversion
+    : quantiteVente / tauxConversion;
   if (stockBefore + STOCK_EPSILON < usdtConsomme) {
     throw badRequest(`Stock insuffisant: ${stockBefore.toFixed(4)} USDT disponibles, ${usdtConsomme.toFixed(4)} USDT requis`);
   }
@@ -372,7 +378,10 @@ function projectSaleRow(row, stockBefore, cmupBefore) {
     ? toNumber(row.__pct_associe_cache, NaN)
     : (100 - pctPorteurCache);
 
-  const valeurAchatXaf = usdtConsomme * cmupBefore;
+  const tauxAchatXaf = cmupBase > 0
+    ? (operation === 'multiply' ? cmupBase * tauxConversion : cmupBase / tauxConversion)
+    : 0;
+  const valeurAchatXaf = quantiteVente * tauxAchatXaf;
   const valeurVenteVisible = quantiteVente * tauxVisible;
   const valeurVenteCachee = quantiteVente * tauxCache;
   const beneficeVisible = valeurVenteVisible - valeurAchatXaf;
@@ -394,7 +403,7 @@ function projectSaleRow(row, stockBefore, cmupBefore) {
       taux_conversion: tauxConversion,
       quantite_vente: quantiteVente,
       usdt_consomme: usdtConsomme,
-      taux_achat_xaf: cmupBefore > 0 ? cmupBefore / tauxConversion : 0,
+      taux_achat_xaf: tauxAchatXaf,
       taux_vente_visible: tauxVisible,
       taux_vente_cache: tauxCache,
       valeur_achat_xaf: valeurAchatXaf,
@@ -495,11 +504,54 @@ async function replayUsdtHistory(conn, targetId, targetOverrideRow) {
   };
 }
 
+async function replayUsdtHistoryAfterDeletion(conn, deletedId) {
+  const [historyRows] = await conn.query(`
+    SELECT *
+    FROM transactions
+    WHERE type = 'vente'
+       OR (type = 'achat' AND UPPER(COALESCE(devise, 'USDT')) = 'USDT')
+  `);
+
+  const history = historyRows
+    .filter((row) => row.id !== deletedId)
+    .sort(sortByTimeline);
+
+  let stockCourant = 0;
+  let cmupCourant = 0;
+  const cascadeUpdates = [];
+
+  for (const row of history) {
+    const projection = row.type === 'achat'
+      ? projectPurchaseRow(row, stockCourant, cmupCourant)
+      : projectSaleRow(row, stockCourant, cmupCourant);
+
+    const changedFields = buildChangedFields(row, projection.updateFields);
+    if (Object.keys(changedFields).length) {
+      if (row.statut === 'committed') {
+        throw badRequest(`Suppression impossible : la transaction verrouillée ${row.id} dépend de cet historique`);
+      }
+      cascadeUpdates.push({ id: row.id, fields: changedFields });
+    }
+
+    stockCourant = projection.stockAfter;
+    cmupCourant = projection.cmupAfter;
+  }
+
+  return {
+    cascadeUpdates,
+    finalStock: stockCourant,
+    finalCmup: cmupCourant,
+  };
+}
+
 async function editSaleTransaction(conn, currentTx, normalized) {
+  const hasClientOverride = normalized.client !== undefined;
   const resolvedClient = await resolveClientReference(
     conn,
-    normalized.client !== undefined ? normalized.client : currentTx.client,
-    normalized.client_id !== undefined ? normalized.client_id : currentTx.client_id,
+    hasClientOverride ? normalized.client : currentTx.client,
+    hasClientOverride
+      ? (normalized.client_id !== undefined ? normalized.client_id : null)
+      : (normalized.client_id !== undefined ? normalized.client_id : currentTx.client_id),
     { required: true }
   );
   const resolvedSupplier = await resolveSupplierReference(
@@ -664,10 +716,13 @@ async function editCashLikeTransaction(conn, currentTx, normalized) {
 }
 
 async function editClientPaymentTransaction(conn, currentTx, normalized) {
+  const hasClientOverride = normalized.client !== undefined;
   const resolvedClient = await resolveClientReference(
     conn,
-    normalized.client !== undefined ? normalized.client : currentTx.client,
-    normalized.client_id !== undefined ? normalized.client_id : currentTx.client_id,
+    hasClientOverride ? normalized.client : currentTx.client,
+    hasClientOverride
+      ? (normalized.client_id !== undefined ? normalized.client_id : null)
+      : (normalized.client_id !== undefined ? normalized.client_id : currentTx.client_id),
     { required: true }
   );
 
@@ -932,6 +987,83 @@ router.put('/:id/edit', asyncHandler(async (req, res) => {
   });
 }));
 
+// ─────────────────────────────────────────────────────────────
+// DELETE /api/transactions/:id — SUPPRESSION AVEC RETOUR EN ARRIÈRE
+// ─────────────────────────────────────────────────────────────
+const deleteTransactionHandler = async (req, res, id) => {
+  const deletedTransaction = await dbTransaction(async (conn) => {
+    const [rows] = await conn.query('SELECT * FROM transactions WHERE id = ?', [id]);
+    if (!rows.length) throw Object.assign(new Error('Transaction non trouvée'), { status: 404 });
+
+    const currentTx = rows[0];
+    if (currentTx.statut === 'committed') {
+      throw badRequest('Suppression impossible : transaction verrouillée');
+    }
+
+    if (req.user?.role === 'associe') {
+      if (String(currentTx.user_id || '') !== String(req.user.id || '')) {
+        throw Object.assign(new Error('Un associé ne peut supprimer que ses propres saisies'), { status: 403 });
+      }
+
+      const createdAt = currentTx.date_enregistrement ? new Date(currentTx.date_enregistrement) : null;
+      const ageMinutes = createdAt instanceof Date && !Number.isNaN(createdAt.getTime())
+        ? (Date.now() - createdAt.getTime()) / 60000
+        : Number.POSITIVE_INFINITY;
+
+      if (ageMinutes > 5) {
+        throw badRequest('Suppression impossible : le délai de 5 minutes est dépassé');
+      }
+    }
+
+    const sourceAccount = currentTx.use_caisse ? 'caisse' : 'depot';
+    const amount = toNumber(currentTx.montant, 0);
+
+    if (currentTx.type === 'achat') {
+      await applyAccountDelta(conn, sourceAccount, toNumber(currentTx.prix_achat_total, 0));
+    } else if (currentTx.type === 'depense' || currentTx.type === 'retrait') {
+      await applyAccountDelta(conn, 'caisse', amount);
+    } else if (currentTx.type === 'versement') {
+      await conn.query(
+        'UPDATE comptes SET montant = montant - ? WHERE type_compte = ?',
+        [amount, 'caisse']
+      );
+    }
+
+    await conn.query('DELETE FROM transactions WHERE id = ?', [id]);
+
+    let replay = null;
+    if (currentTx.type === 'vente' || currentTx.type === 'achat') {
+      replay = await replayUsdtHistoryAfterDeletion(conn, id);
+      for (const cascade of replay.cascadeUpdates) {
+        await updateTransactionColumns(conn, cascade.id, cascade.fields);
+      }
+      await upsertStockRow(conn, 'USDT', replay.finalStock, replay.finalCmup);
+    }
+
+    await conn.query(
+      "INSERT INTO logs (id, date_heure, type_evenement, description, user_id) VALUES (?, NOW(), 'suppression', ?, ?)",
+      [`LOG_${Date.now()}`, `Transaction supprimée: ${id} (type: ${currentTx.type})`, req.user.id]
+    );
+
+    return { id, type: currentTx.type, replay };
+  });
+
+  res.json({
+    success: true,
+    message: 'Transaction supprimée',
+    transaction_id: deletedTransaction.id,
+    type: deletedTransaction.type,
+  });
+};
+
+router.delete('/delete/:id', asyncHandler(async (req, res) => {
+  await deleteTransactionHandler(req, res, req.params.id);
+}));
+
+router.delete('/:id', asyncHandler(async (req, res) => {
+  await deleteTransactionHandler(req, res, req.params.id);
+}));
+
 // ═════════════════════════════════════════════════════════════
 // ACHAT
 // ✅ FIX: Retourner statut 'pending' (pas 'committed')
@@ -1034,6 +1166,7 @@ async function handleVente(data, user) {
   const {
     devise_vente, taux_conversion, quantite_vente,
     taux_vente_visible,
+    cmup_usdt = null, cmup_operation = 'divide',
     client, fournisseur, id_client = null, id_fournisseur = null, client_id = null, fournisseur_id = null, taux_vente_cache = null,
     mode_paiement  = 'XAF',
   } = data;
@@ -1051,6 +1184,9 @@ async function handleVente(data, user) {
     const tauxVVisible = parseFloat(taux_vente_visible);
     const tauxVCacheRaw = taux_vente_cache ? parseFloat(taux_vente_cache) : tauxVVisible;
     const tauxVCache    = Number.isFinite(tauxVCacheRaw) && tauxVCacheRaw > 0 ? tauxVCacheRaw : tauxVVisible;
+    const cmupBaseRaw   = parseFloat(cmup_usdt);
+    const cmupBase      = Number.isFinite(cmupBaseRaw) && cmupBaseRaw > 0 ? cmupBaseRaw : cmupActuel;
+    const operation     = String(cmup_operation || 'divide').toLowerCase() === 'multiply' ? 'multiply' : 'divide';
     const normalizeLabel = (value) => String(value || '')
       .replace(/\s*\(.*$/, '')
       .replace(/\s*·.*$/, '')
@@ -1133,8 +1269,12 @@ async function handleVente(data, user) {
     // Convention métier:
     // quantite_vente = quantité vendue au client dans la devise choisie
     // usdt_consomme   = quantité réelle retirée du stock USDT
-    const usdtConsomme = qteVente / tauxConv;
-    const tauxAchatXAF = cmupActuel > 0 ? cmupActuel / tauxConv : 0;
+    const usdtConsomme = operation === 'multiply'
+      ? qteVente * tauxConv
+      : qteVente / tauxConv;
+    const tauxAchatXAF = cmupBase > 0
+      ? (operation === 'multiply' ? cmupBase * tauxConv : cmupBase / tauxConv)
+      : 0;
 
     if (stockActuel < usdtConsomme)
       throw new Error(`Stock insuffisant: ${stockActuel.toFixed(4)} USDT disponibles, ${usdtConsomme.toFixed(4)} USDT requis`);
@@ -1142,7 +1282,7 @@ async function handleVente(data, user) {
     // ── Calculs financiers ────────────────────────────────────
     const valeurVenteVisible = qteVente * tauxVVisible;
     const valeurVenteCachee  = qteVente * tauxVCache;
-    const valeurAchatXAF     = usdtConsomme * cmupActuel;
+    const valeurAchatXAF     = qteVente * tauxAchatXAF;
     const montantAPayer      = valeurVenteVisible;
     const montantPaye        = Math.max(0, toNumber(data.montant_paye ?? data.montantPaye, 0));
 
@@ -1179,8 +1319,8 @@ async function handleVente(data, user) {
         ?, ?,
         ?, ?,
         ?, ?,
-        ?, ?,
         ?, ?, ?, ?,
+        ?, ?,
         'pending', ?
       )`,
       [
