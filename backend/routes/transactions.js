@@ -141,6 +141,8 @@ function normalizeEditPayload(body = {}) {
   if (normalized.tauxVisible !== undefined && normalized.taux_vente_visible === undefined) normalized.taux_vente_visible = normalized.tauxVisible;
   if (normalized.tauxCache !== undefined && normalized.taux_vente_cache === undefined) normalized.taux_vente_cache = normalized.tauxCache;
   if (normalized.quantiteDevise !== undefined && normalized.quantite_vente === undefined) normalized.quantite_vente = normalized.quantiteDevise;
+  if (normalized.cmupUsdt !== undefined && normalized.cmup_usdt === undefined) normalized.cmup_usdt = normalized.cmupUsdt;
+  if (normalized.cmupOperation !== undefined && normalized.cmup_operation === undefined) normalized.cmup_operation = normalized.cmupOperation;
   if (normalized.quantiteAchat !== undefined && normalized.quantite === undefined) normalized.quantite = normalized.quantiteAchat;
   if (normalized.taux !== undefined && normalized.taux_achat_unitaire === undefined) normalized.taux_achat_unitaire = normalized.taux;
   if (normalized.tauxAchatXAF !== undefined && normalized.taux_achat_xaf === undefined) normalized.taux_achat_xaf = normalized.tauxAchatXAF;
@@ -357,6 +359,21 @@ function projectSaleRow(row, stockBefore, cmupBefore) {
   if (!(tauxConversion > 0)) throw badRequest('Taux de conversion invalide');
   if (!(tauxVisible > 0)) throw badRequest('Taux de vente invalide');
 
+<<<<<<< HEAD
+=======
+  const operation = (() => {
+    const explicit = String(row.cmup_operation || '').toLowerCase();
+    if (explicit === 'multiply' || explicit === 'divide') return explicit;
+    const cmupBase = toNumber(row.ancien_cmup, NaN);
+    const tauxAchat = toNumber(row.taux_achat_xaf, NaN);
+    if (cmupBase > 0 && tauxConversion > 0 && tauxAchat > 0) {
+      const multiplyDiff = Math.abs(tauxAchat - (cmupBase * tauxConversion));
+      const divideDiff = Math.abs(tauxAchat - (cmupBase / tauxConversion));
+      return multiplyDiff <= divideDiff ? 'multiply' : 'divide';
+    }
+    return 'divide';
+  })();
+>>>>>>> 8f4c86cfe9da6b0feaf4461eda8a6273cb605e2f
   const usdtConsomme = operation === 'multiply'
     ? quantiteVente * tauxConversion
     : quantiteVente / tauxConversion;
@@ -572,6 +589,7 @@ async function editSaleTransaction(conn, currentTx, normalized) {
     devise_vente: normalized.devise_vente !== undefined ? normalized.devise_vente : currentTx.devise_vente,
     taux_conversion: normalized.taux_conversion !== undefined ? normalized.taux_conversion : currentTx.taux_conversion,
     quantite_vente: normalized.quantite_vente !== undefined ? normalized.quantite_vente : currentTx.quantite_vente,
+    cmup_operation: normalized.cmup_operation !== undefined ? normalized.cmup_operation : currentTx.cmup_operation,
     taux_vente_visible: normalized.taux_vente_visible !== undefined ? normalized.taux_vente_visible : currentTx.taux_vente_visible,
     taux_vente_cache: normalized.taux_vente_cache !== undefined ? normalized.taux_vente_cache : currentTx.taux_vente_cache,
     pourcentage_porteur: normalized.pourcentage_porteur !== undefined ? normalized.pourcentage_porteur : currentTx.pourcentage_porteur,
@@ -1168,6 +1186,7 @@ async function handleVente(data, user) {
     taux_vente_visible,
     cmup_usdt = null, cmup_operation = 'divide',
     client, fournisseur, id_client = null, id_fournisseur = null, client_id = null, fournisseur_id = null, taux_vente_cache = null,
+    cmup_usdt = null, cmup_operation = 'divide',
     mode_paiement  = 'XAF',
   } = data;
 
@@ -1178,6 +1197,9 @@ async function handleVente(data, user) {
 
     const stockActuel = stockRows.length ? parseFloat(stockRows[0].quantite) : 0;
     const cmupActuel  = stockRows.length ? parseFloat(stockRows[0].cmup)     : 0;
+    const cmupSaisiRaw = parseFloat(cmup_usdt);
+    const cmupSaisi = Number.isFinite(cmupSaisiRaw) && cmupSaisiRaw > 0 ? cmupSaisiRaw : cmupActuel;
+    const operation = String(cmup_operation || 'divide').toLowerCase() === 'multiply' ? 'multiply' : 'divide';
 
     const qteVente     = parseFloat(quantite_vente);
     const tauxConv     = parseFloat(taux_conversion);
@@ -1272,8 +1294,13 @@ async function handleVente(data, user) {
     const usdtConsomme = operation === 'multiply'
       ? qteVente * tauxConv
       : qteVente / tauxConv;
+<<<<<<< HEAD
     const tauxAchatXAF = cmupBase > 0
       ? (operation === 'multiply' ? cmupBase * tauxConv : cmupBase / tauxConv)
+=======
+    const tauxAchatXAF = cmupSaisi > 0
+      ? (operation === 'multiply' ? cmupSaisi * tauxConv : cmupSaisi / tauxConv)
+>>>>>>> 8f4c86cfe9da6b0feaf4461eda8a6273cb605e2f
       : 0;
 
     if (stockActuel < usdtConsomme)
@@ -1282,7 +1309,11 @@ async function handleVente(data, user) {
     // ── Calculs financiers ────────────────────────────────────
     const valeurVenteVisible = qteVente * tauxVVisible;
     const valeurVenteCachee  = qteVente * tauxVCache;
+<<<<<<< HEAD
     const valeurAchatXAF     = qteVente * tauxAchatXAF;
+=======
+    const valeurAchatXAF     = usdtConsomme * cmupSaisi;
+>>>>>>> 8f4c86cfe9da6b0feaf4461eda8a6273cb605e2f
     const montantAPayer      = valeurVenteVisible;
     const montantPaye        = Math.max(0, toNumber(data.montant_paye ?? data.montantPaye, 0));
 
@@ -1328,7 +1359,7 @@ async function handleVente(data, user) {
         devise_vente, tauxConv, tauxAchatXAF, qteVente, usdtConsomme,
         tauxVVisible, valeurVenteVisible,
         tauxVCache,   valeurVenteCachee,
-        valeurAchatXAF, cmupActuel,
+        valeurAchatXAF, cmupSaisi,
         beneficeVisible, beneficeCache,
         partPorteurVisible, partAssocieVisible,
         partPorteurCachee,  partAssocieCachee,
