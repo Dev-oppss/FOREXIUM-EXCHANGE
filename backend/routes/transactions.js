@@ -1010,18 +1010,7 @@ const deleteTransactionHandler = async (req, res, id) => {
     }
 
     if (req.user?.role === 'associe') {
-      if (String(currentTx.user_id || '') !== String(req.user.id || '')) {
-        throw Object.assign(new Error('Un associé ne peut supprimer que ses propres saisies'), { status: 403 });
-      }
-
-      const createdAt = currentTx.date_enregistrement ? new Date(currentTx.date_enregistrement) : null;
-      const ageMinutes = createdAt instanceof Date && !Number.isNaN(createdAt.getTime())
-        ? (Date.now() - createdAt.getTime()) / 60000
-        : Number.POSITIVE_INFINITY;
-
-      if (ageMinutes > 5) {
-        throw badRequest('Suppression impossible : le délai de 5 minutes est dépassé');
-      }
+      throw Object.assign(new Error('Un associé ne peut pas supprimer une opération'), { status: 403 });
     }
 
     const sourceAccount = currentTx.use_caisse ? 'caisse' : 'depot';
