@@ -7441,6 +7441,7 @@ const Dashboard = ({
                   const isAssocPending = tx.statut === 'assoc_pending';
                   const isPorteurPending = tx.statut === 'porteur_pending';
                   const canEditTx = tx.statut !== 'committed' && (isPorteur || canAssociateEditTransaction(tx, user, nowTick));
+                  const canDeleteTx = isPorteur;
                   // Dot orange pulsant : visible pour porteur sur vente ET achat assoc_pending
                   const showOrangeDot = isPorteur && isAssocPending;
                   const displayAmount = ['paiement_client', 'paiement_fournisseur'].includes(tx.type)
@@ -7561,21 +7562,23 @@ const Dashboard = ({
                                 background: tk.cardB, color: tk.sub,
                                 display:'flex', alignItems:'center', gap:3,
                               }}><Edit2 size={10}/>{t.modifierTx}</button>
-                              <button onClick={async () => {
-                                if (!window.confirm(langue === 'fr' ? 'Supprimer cette opération ?' : 'Delete this operation?')) return;
-                                try {
-                                  await onDeleteTransaction(tx.id);
-                                  toast.success(langue === 'fr' ? 'Opération supprimée' : 'Operation deleted');
-                                } catch(e) { toast.error(e.message || 'Erreur'); }
-                              }} style={{
-                                fontSize:10, fontWeight:700, padding:'3px 9px',
-                                borderRadius:6, border:'none', cursor:'pointer',
-                                background:'#EF4444', color:'#fff',
-                                display:'flex', alignItems:'center', gap:3,
-                              }} title={langue === 'fr' ? 'Supprimer l\'opération' : 'Delete operation'}>
-                                <Trash2 size={10} strokeWidth={2.5}/>
-                                {langue === 'fr' ? 'Supprimer' : 'Delete'}
-                              </button>
+                              {canDeleteTx && (
+                                <button onClick={async () => {
+                                  if (!window.confirm(langue === 'fr' ? 'Supprimer cette opération ?' : 'Delete this operation?')) return;
+                                  try {
+                                    await onDeleteTransaction(tx.id);
+                                    toast.success(langue === 'fr' ? 'Opération supprimée' : 'Operation deleted');
+                                  } catch(e) { toast.error(e.message || 'Erreur'); }
+                                }} style={{
+                                  fontSize:10, fontWeight:700, padding:'3px 9px',
+                                  borderRadius:6, border:'none', cursor:'pointer',
+                                  background:'#EF4444', color:'#fff',
+                                  display:'flex', alignItems:'center', gap:3,
+                                }} title={langue === 'fr' ? 'Supprimer l\'opération' : 'Delete operation'}>
+                                  <Trash2 size={10} strokeWidth={2.5}/>
+                                  {langue === 'fr' ? 'Supprimer' : 'Delete'}
+                                </button>
+                              )}
                               </>
                             )}
                           </div>
@@ -7920,7 +7923,6 @@ const Dashboard = ({
             quantite: editTx.quantiteDevise || editTx.quantite,
             usdtConsomme: editTx.usdtConsomme,
             stockUsdt_avant: editTx.stockUsdt_avant,
-            ancien_cmup: editTx.ancien_cmup,
             nouveau_cmup: editTx.nouveau_cmup,
             client: editTx.client,
             id_client: editTx.idClient || editTx.id_client,
